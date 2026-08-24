@@ -5,6 +5,23 @@ comparison data: products, best prices, price history, ratings and categories.
 It wraps the Geizhals mobile app's API (`api.geizhals.net/gh/v9`) and returns the
 important fields to the AI.
 
+<p align="center">
+  <a href="https://geizhals.at/"><img alt="Products tracked" src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FSamxel%2Fgeizhals-mcp%2Fmain%2Fcoverage.json&query=%24.products&label=products&color=green&suffix=%20tracked&cacheSeconds=3600"></a>
+  <a href="https://geizhals.at/"><img alt="Prices compared" src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FSamxel%2Fgeizhals-mcp%2Fmain%2Fcoverage.json&query=%24.prices&label=prices&color=ff7300&suffix=%20compared&cacheSeconds=3600"></a>
+  <a href="https://geizhals.at/"><img alt="Merchants" src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FSamxel%2Fgeizhals-mcp%2Fmain%2Fcoverage.json&query=%24.merchants&label=merchants&color=1e6fff&suffix=%20shops&cacheSeconds=3600"></a>
+</p>
+
+## Highlights
+
+- **Best price across every shop**  
+  Find a product and get its **best price, full price range, star ratings and test-review count**, aggregated over all Geizhals merchants instead of a single listing.
+
+- **Know when to buy**  
+  Pull the **full price history** and the **current price drops** (Schnäppchen), sortable by biggest percent off, so a model can answer "is this cheap right now or should I wait".
+
+- **From keyword to category**  
+  Search by free text or browse the **complete Geizhals category tree** (2200+ categories shipped with the server) to drill into exactly the right segment, then compare a shortlist side by side.
+
 ## Tools
 
 **`search_geizhals(query, ...)`**
@@ -98,6 +115,9 @@ with [`mcp-remote`](https://www.npmjs.com/package/mcp-remote) (needs
 
 - `data/categories.json` is a snapshot of Geizhals' category tree (title, id,
   children). `main.py` loads it for `list_categories`.
+- `coverage.json` holds the catalogue counts shown in the badges above.
+  `scripts/update_coverage.py` refreshes it from the Geizhals homepage and a
+  daily GitHub Action commits any change.
 - API details are documented in [`search_api.md`](search_api.md).
 - This uses Geizhals' internal mobile API, not an official one. Be nice to it.
 

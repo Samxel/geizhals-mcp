@@ -1,0 +1,35 @@
+name: coverage
+on:
+  schedule:
+    - cron: "0 4 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: coverage-update
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Fetch live catalogue counts
+        run: python scripts/update_coverage.py
+
+      - name: Commit and push coverage.json if it changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add coverage.json
+          git diff --staged --quiet && exit 0
+          git commit -m "chore: update coverage counts"
+          git pull --rebase origin main
+          git push
