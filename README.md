@@ -53,7 +53,7 @@ Compare several products side by side.
 
 **`get_deals(sort="percent", ...)`**
 
-Current price drops (Geizhals' Bestpreis-Entwicklung / Schnäppchen): products
+Current price drops: products
 whose best price just fell, with the percent and amount off. Sort by biggest
 `percent` drop, `price`, `latest`, `popularity` or `top` deals, and filter with
 `min_discount_percent`.
@@ -127,14 +127,7 @@ with [`mcp-remote`](https://www.npmjs.com/package/mcp-remote) (needs
 signing scheme in `main.py` (`GH_HMAC_SECRET`, `request_fingerprint`,
 `API_HOST`) no longer matches what the live Geizhals app sends. This is
 reverse-engineered from the app and hardcoded, so it can drift whenever
-Geizhals rotates the secret or changes the fingerprint scheme — there's no
-config to fix, the constants need updating to match the current app.
-
-**`403` with no body / a different error** — check the response body, not
-just the status: `_post` only raises a generic `RuntimeError("Error")` on
-403, so add a temporary print of `response.text` in `_post` (or replicate
-the request manually) to see the real reason before assuming it's the
-fingerprint.
+Geizhals rotates the secret or changes the fingerprint scheme.
 
 ## Disclaimer
 
