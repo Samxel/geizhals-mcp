@@ -1,0 +1,16 @@
+name: Question
+description: Ask how to use or set up the server
+labels: ["question", "needs-triage"]
+body:
+  - type: textarea
+    id: question
+    attributes:
+      label: Your question
+      placeholder: How do I connect this from ... / how do I filter by ... ?
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: What you have tried, your client, anything relevant.

@@ -1,0 +1,45 @@
+name: Bug report
+description: Something in the MCP server is broken
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: Thanks for the report. Please fill in what you can.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you do, and what went wrong?
+      placeholder: Called search_autos(make="BMW", ...) and got ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: false
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Search (search_geizhals)
+        - Product / prices (get_product / get_price_history / compare_products)
+        - Ratings (get_product_ratings)
+        - Categories (list_categories / browse_category)
+        - Auth / token
+        - Other or not sure
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Server output / error
+      description: Paste the relevant traceback or MCP error. It is rendered as code.
+      render: shell
+  - type: input
+    id: client
+    attributes:
+      label: MCP client
+      placeholder: Claude Desktop, ...
