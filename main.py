@@ -130,11 +130,27 @@ async def _post(endpoint: str, payload: dict) -> dict:
         await asyncio.sleep(delay)
 
 
-def _params(loc: str, hloc: Optional[list[str]], **extra) -> dict:
-    """Common param block (loc = pricing site, hloc = shop countries)."""
-    p = {"loc": loc, "hloc": hloc or [loc], "lang": "en"}
+def _params(loc: str, hloc: Optional[list[str]], *, lang: str = "en", **extra) -> dict:
+    """Common param block (loc = pricing site, hloc = shop countries, lang =
+    display language for names/labels)."""
+    p = {"loc": loc, "hloc": hloc or [loc], "lang": lang}
     p.update({k: v for k, v in extra.items() if v is not None})
     return p
+
+
+# Price history is only served for these fixed windows (1/3/6/12 months); any
+# other `days` value gives a 400, so requests are snapped to the nearest one.
+HISTORY_WINDOWS = (31, 91, 183, 365)
+
+
+def _leaf_cat(categories: Optional[list]) -> Optional[str]:
+    """The browseable `cat` code of the deepest category in a hit's category
+    path (the code `browse_category` / the `category` search filter take)."""
+    for c in reversed(categories or []):
+        idd = (c or {}).get("id") or {}
+        if isinstance(idd, dict) and idd.get("cat"):
+            return idd["cat"]
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -188,7 +204,8 @@ def _summarize_search_hit(p: dict) -> dict:
         "id": p.get("gzhid"),
         "name": p.get("product") or p.get("product_for_sort"),
         "manufacturer": p.get("manufacturer_name"),
-        "category": [c.get("name") for c in p.get("category", []) if isinstance(c, dict)],
+        "category": [c.get("label") for c in p.get("category", []) if isinstance(c, dict)],
+        "category_code": _leaf_cat(p.get("category")),
         "image": (_image_urls(p.get("images")) or [None])[0],
         "url": f"https://geizhals.at{urls.get('overview')}" if urls.get("overview") else None,
         "listed_since": p.get("listed_since"),
@@ -206,6 +223,7 @@ def _summarize_product(p: dict) -> dict:
         "rating_stars": p.get("rating_stars"),
         "rating_percent": p.get("rating_percent"),
         "rating_comments": p.get("rating_comments"),
+        "rating_count": p.get("rating_count"),
         "best_price_min": bp.get("min"),
         "best_price_max": bp.get("max"),
         "images": _image_urls(p.get("images")),
@@ -238,6 +256,26 @@ def _summarize_deal(d: dict) -> dict:
     }
 
 
+def _summarize_category_hit(p: dict) -> dict:
+    """Normalize a categorylist product into the same shape the other tools
+    return (categorylist ships raw, inconsistent fields otherwise)."""
+    pricing = p.get("pricing") or {}
+    return {
+        "id": p.get("id"),
+        "name": p.get("product_for_sort") or p.get("product"),
+        "best_price": p.get("best_price"),
+        "currency": pricing.get("loc_currency"),
+        "offer_count": p.get("offer_count"),
+        "rating_stars": p.get("rating_stars"),
+        "rating_percent": p.get("rating_percent"),
+        "rating_count": p.get("rating_count"),
+        "shop": p.get("best_merch_name"),
+        "image": p.get("image_n") or p.get("image_m") or p.get("image_thumb"),
+        "url": p.get("product_link"),
+        "mpn": p.get("mpn"),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Tools
 # ---------------------------------------------------------------------------
@@ -247,6 +285,7 @@ async def search_geizhals(
     *,
     loc: Country = "at",
     hloc: Optional[list[Country]] = None,
+    lang: Literal["en", "de"] = "en",
     category: Optional[str] = None,
     manufacturer: Optional[int] = None,
     sort: Sort = "",
@@ -270,8 +309,11 @@ async def search_geizhals(
         loc: Country site the prices are shown for: "at", "de", "eu", "uk",
             "pl" or "sk". Default "at" (Austria).
         hloc: Which shop countries' offers to include; defaults to ``[loc]``.
+        lang: Display language for names/labels in the results, "en" (default)
+            or "de".
         category: Restrict to a category code, e.g. from a prior call's
-            ``facets.categories`` or from ``list_categories``.
+            ``facets.categories`` (each hit also carries its own
+            ``category_code``) or from ``list_categories``.
         manufacturer: Restrict to a manufacturer id from a prior call's
             ``facets.manufacturers``.
         sort: "" (relevance, default), "p" (price), "n" (newest) or "r"
@@ -281,7 +323,7 @@ async def search_geizhals(
     """
     payload = {
         "query": query,
-        "params": _params(loc, hloc, offset=offset, pagesize=rows, n_offers=1,
+        "params": _params(loc, hloc, lang=lang, offset=offset, pagesize=rows, n_offers=1,
                           add_ratings=1, bestprice_extrema=0, show_parent_category=1,
                           category_suggestions=1, sort=sort,
                           filter_category=category or "", filter_manufacturer=manufacturer or 0),
@@ -303,7 +345,8 @@ async def search_geizhals(
 
 @mcp.tool()
 async def get_product(product_id: Union[int, str], *, loc: Country = "at",
-                      hloc: Optional[list[Country]] = None, n_offers: int = 20) -> dict:
+                      hloc: Optional[list[Country]] = None,
+                      lang: Literal["en", "de"] = "en", n_offers: int = 20) -> dict:
     """Look up full detail for a single product you already have the Geizhals
     id for (from ``search_geizhals`` or ``browse_category`` results). Returns
     name, manufacturer, rating (stars/percent/comment count), best-price
@@ -322,7 +365,7 @@ async def get_product(product_id: Union[int, str], *, loc: Country = "at",
     payload = {
         "query": str(product_id),
         "type": "id",
-        "params": _params(loc, hloc, n_offers=n_offers, add_ratings=1, merchant_details=1,
+        "params": _params(loc, hloc, lang=lang, n_offers=n_offers, add_ratings=1, merchant_details=1,
                           bestprice_extrema=True, review_details=1, test_reviews=True,
                           image_size="n"),
     }
@@ -342,14 +385,16 @@ async def get_price_history(product_id: Union[int, str], *, days: int = 31,
 
     Args:
         product_id: The Geizhals product id (``gzhid``).
-        days: How many days of history to fetch, counting back from today.
-            Default 31.
+        days: History window. Geizhals only serves four fixed windows --
+            31, 91, 183 or 365 days (1/3/6/12 months) -- so any other value is
+            snapped to the nearest one. Default 31.
         loc: Country site the prices are shown for: "at", "de", "eu", "uk",
             "pl" or "sk".
     """
-    payload = {"id": int(product_id), "params": {"days": days, "loc": loc, "hloc": []}}
+    window = min(HISTORY_WINDOWS, key=lambda w: abs(w - days))
+    payload = {"id": int(product_id), "params": {"days": window, "loc": loc, "hloc": []}}
     data = await _post("price_history", payload)
-    return {"meta": data.get("meta"), "series": data.get("response")}
+    return {"window_days": window, "meta": data.get("meta"), "series": data.get("response")}
 
 
 @mcp.tool()
@@ -381,7 +426,8 @@ async def get_product_ratings(product_id: Union[int, str], *, rows: int = 10,
 
 @mcp.tool()
 async def browse_category(category: str, *, loc: Country = "at",
-                          hloc: Optional[list[Country]] = None, sort: Sort = "t",
+                          hloc: Optional[list[Country]] = None,
+                          lang: Literal["en", "de"] = "en", sort: Sort = "t",
                           price_min: Optional[float] = None, price_max: Optional[float] = None,
                           rows: int = 20, offset: int = 0) -> dict:
     """List products belonging to one category, browsed by category code
@@ -391,28 +437,33 @@ async def browse_category(category: str, *, loc: Country = "at",
     for graphics cards); don't guess codes.
 
     Args:
-        category: The category code from ``list_categories``.
+        category: The category code from ``list_categories`` or a search hit's
+            ``category_code`` / ``facets.categories``.
         loc: Country site for pricing: "at", "de", "eu", "uk", "pl" or "sk".
         hloc: Which shop countries' offers to include; defaults to ``[loc]``.
+        lang: Display language for names/labels, "en" (default) or "de".
         sort: "t" (default relevance), "p" (price), "n" (newest) or "r"
             (rating).
         price_min / price_max: Optional best-price bounds to filter to.
         rows: Max results to return (page size). Default 20.
         offset: Paging offset into the result set. Default 0.
     """
-    params = _params(loc, hloc, offset=offset, pagesize=rows, sort=sort,
+    params = _params(loc, hloc, lang=lang, offset=offset, pagesize=rows, sort=sort,
                      deals_as_array=1, add_metadata=True, price_range=1,
                      bpmin=price_min or 0.0, bpmax=price_max or 250000.0,
                      omit_description=1)
     data = (await _post("categorylist", {"category": category, "params": params})).get("response", {})
     products = data.get("productlist") or data.get("products") or []
-    if isinstance(data, list):
-        products = data
-    return {"category": category, "results": products if isinstance(products, list) else products}
+    return {
+        "category": category,
+        "total": data.get("total"),
+        "results": [_summarize_category_hit(p) for p in products if isinstance(p, dict)],
+    }
 
 
 @mcp.tool()
-async def compare_products(product_ids: list[Union[int, str]], *, loc: Country = "at") -> dict:
+async def compare_products(product_ids: list[Union[int, str]], *, loc: Country = "at",
+                           lang: Literal["en", "de"] = "en") -> dict:
     """Compare several products side by side, e.g. to help the user pick
     between a shortlist of alternatives. Returns the raw Geizhals
     comparison response (unsummarized) for the given ids.
@@ -420,8 +471,9 @@ async def compare_products(product_ids: list[Union[int, str]], *, loc: Country =
     Args:
         product_ids: 2+ Geizhals product ids (``gzhid``) to compare.
         loc: Country site for pricing: "at", "de", "eu", "uk", "pl" or "sk".
+        lang: Display language for names/labels, "en" (default) or "de".
     """
-    payload = {"id": [int(i) for i in product_ids], "params": _params(loc, None)}
+    payload = {"ids": [int(i) for i in product_ids], "params": _params(loc, None, lang=lang)}
     return await _post("compare_products", payload)
 
 
@@ -431,6 +483,7 @@ async def get_deals(
     sort: Literal["percent", "price", "latest", "popularity", "top"] = "percent",
     loc: Country = "at",
     hloc: Optional[list[Country]] = None,
+    lang: Literal["en", "de"] = "en",
     min_discount_percent: Optional[float] = None,
     limit: int = 20,
 ) -> dict:
@@ -451,11 +504,12 @@ async def get_deals(
             top_deal flag first).
         loc: Country site for pricing: "at", "de", "eu", "uk", "pl" or "sk".
         hloc: Which shop countries' offers to include; defaults to ``[loc]``.
+        lang: Display language for names/labels, "en" (default) or "de".
         min_discount_percent: Only keep deals that dropped at least this many
             percent, e.g. 15 for "-15% or better". Omit for no floor.
         limit: Max number of deals to fetch and return. Default 20.
     """
-    params = _params(loc, hloc, limit=limit, price_range=1)
+    params = _params(loc, hloc, lang=lang, limit=limit, price_range=1)
     data = (await _post("bestprice_development", {"params": params})).get("response", {})
     deals = [_summarize_deal(d) for d in data.get("deals", [])]
 
@@ -486,27 +540,32 @@ async def list_categories(query: Optional[str] = None, limit: int = 40) -> dict:
     facets -- don't guess codes.
 
     Returns ``{count, categories: [{code, name, path}]}``. ``path`` shows
-    where the category sits in the tree (e.g. "Hardware / Grafikkarten");
-    ``code`` is only present on leaf-ish categories that actually support
-    browsing -- entries without a usable code are omitted from the results.
+    where the category sits in the tree (e.g. "Hardware / Graphics Cards /
+    PCIe"). Category names are English -- search "graphics cards", not
+    "grafikkarten". Each browseable ``code`` appears once: Geizhals models
+    sub-filters (e.g. "Apple macOS" under Notebooks) as the same ``code`` plus
+    an internal filter, so those refinements are collapsed into their parent
+    category here.
 
     Args:
-        query: Optional case/diacritic-insensitive substring to filter
-            category names by, e.g. "grafikkarten". Omit to list all
-            (leaf-ish) categories, up to ``limit``.
+        query: Optional case/diacritic-insensitive substring matched against
+            the whole category path, e.g. "graphics" or "notebooks". Omit to
+            list all categories, up to ``limit``.
         limit: Max number of categories to return. Default 40.
     """
     flat: list = []
     _walk_categories(_CATEGORIES, [], flat)
-    rows = []
-    q = _norm(query) if query else None
+    seen: set = set()
+    canonical = []
     for node, path in flat:
         code = _cat_code(node)
-        if not code:
+        if not code or code in seen:
             continue
-        if q and q not in _norm(node.get("title", "")):
-            continue
-        rows.append({"code": code, "name": node.get("title"), "path": path})
+        seen.add(code)
+        canonical.append((code, node.get("title"), path))
+    q = _norm(query) if query else None
+    rows = [{"code": code, "name": name, "path": path}
+            for code, name, path in canonical if not q or q in _norm(path)]
     return {"count": len(rows), "categories": rows[:limit]}
 
 
