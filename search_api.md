@@ -50,7 +50,7 @@ Most methods take a `params` object with:
 | `loc` | pricing site / country (`at`, `de`, `eu`, ...) |
 | `hloc` | list of shop countries to include |
 | `lang` | response language (`en`, `de`) |
-| `pagesize` / `offset` | paging |
+| `pagesize` / `offset` | paging. `pagesize` is validated against a fixed set (1, 5, 10, 30, 100, 300, 1000); any other value returns 400 |
 | `n_offers` | how many offers to include per product |
 
 ## Methods
