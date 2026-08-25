@@ -60,12 +60,12 @@ Most methods take a `params` object with:
 | `search_product` | `{query, params}` | `response.products[]`, `facet_aggregates` (categories, manufacturer, price_range), `total` |
 | `query_product` | `{query, type:"id", params}` | `response[]` full product (bestprices, rating, images, urls, test_reviews) |
 | `products_details` | `{id:[...], params}` | `response[]` best_price, offer_count, pricing, images |
-| `price_history` | `{id, params:{days, loc}}` | `response[] = [ts_ms, price, flag]`, `meta{min,max,last_ts,current_best}` |
+| `price_history` | `{id, params:{days, loc}}` | `response[] = [ts_ms, price, flag]`, `meta{min,max,last_ts,current_best}`. `days` must be one of 31/91/183/365 (else 400) |
 | `query_product_ratings` | `{product_id, offset, pagesize, sort, params}` | aggregate_star_rating, per_star_rating_count, ... |
 | `query_variant` | `{variant, params}` | `response` variant offers |
 | `categorylist` | `{category:<code>, params}` | `response` products of a category |
 | `categories` | `{params:{lang}}` | `categories[]` full tree (title, id, childs) |
-| `compare_products` | `{id:[...], params}` | side-by-side comparison |
+| `compare_products` | `{ids:[...], params}` | side-by-side comparison (note the key is `ids`, not `id`) |
 | `bestprice_development` | `{params:{limit, price_range, loc, hloc}}` | `response.deals[]` price drops (`change_in_percent`, `change_in_local`, `old_price`, `best_price`, `alltime_best`, `top_deal`, `rank`) |
 | `top_products` / `new_products` / `top_categories` / `hero` | `{params}` | home-screen widgets |
 
