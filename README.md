@@ -61,7 +61,8 @@ whose best price just fell, with the percent and amount off. Sort by biggest
 **`list_categories(query)`**
 
 Browse Geizhals' category tree to find the category codes `browse_category`
-takes. The full tree ships with the server in `data/categories.json`.
+takes. Matches English or German names ("graphics cards" and "grafikkarten"
+both work). The full tree ships with the server in `data/categories.json`.
 
 ## Setup
 
@@ -113,8 +114,9 @@ with [`mcp-remote`](https://www.npmjs.com/package/mcp-remote) (needs
 
 ## Notes
 
-- `data/categories.json` is a snapshot of Geizhals' category tree (title, id,
-  children). `main.py` loads it for `list_categories`.
+- `data/categories.json` is a snapshot of Geizhals' category tree (title,
+  title_de, id, children). `main.py` loads it for `list_categories`, which
+  matches queries against both the English and German names.
 - `coverage.json` holds the catalogue counts shown in the badges above.
   `scripts/update_coverage.py` refreshes it from the Geizhals homepage and a
   daily GitHub Action commits any change.
@@ -128,6 +130,12 @@ signing scheme in `main.py` (`GH_HMAC_SECRET`, `request_fingerprint`,
 `API_HOST`) no longer matches what the live Geizhals app sends. This is
 reverse-engineered from the app and hardcoded, so it can drift whenever
 Geizhals rotates the secret or changes the fingerprint scheme.
+
+**`400 Bad Request`** — Geizhals validates several params against fixed sets
+and rejects anything else outright. The two that bite: `pagesize` must be one
+of 1/5/10/30/100/300/1000, and `price_history`'s `days` must be 31/91/183/365.
+The tools snap `rows` and `days` to allowed values, so a 400 usually means
+another param drifted; the response body names the offending field.
 
 ## Disclaimer
 
