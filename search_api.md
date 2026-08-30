@@ -91,7 +91,15 @@ feedback) tied to a user account.
 - `query_product_ratings` always answers with a `geizhals.de` `ratings_url`,
   whatever `loc` says.
 - `facet_aggregates.price_range.min` is the filter widget's floor and is
-  almost always `0`; it is not the cheapest hit.
+  almost always `0`; it is not the cheapest hit. `categorylist`'s top-level
+  `price_range`, by contrast, is real.
+- `bestprice_extrema=1` adds a per-hit `bestprices{min,max,first,last}` to
+  `search_product` without disturbing `prices`/`offer_count`, which is the only
+  way to price a hit that has no live offers without a second request.
+- `compare_products` unions the property list across every id in the call, so a
+  product gets empty values for properties that belong to the others.
+- `price_history` answers `400` for products with no tracked history at all
+  (uncategorised marketplace listings), which looks the same as a bad `days`.
 
 ## Categories
 
