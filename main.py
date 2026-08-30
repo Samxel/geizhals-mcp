@@ -11,6 +11,8 @@ import base64
 import html
 import unicodedata
 import urllib.parse
+import functools
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Union, Literal
 import logging
@@ -101,6 +103,23 @@ def _auth_header(body_bytes: bytes, method: str = "POST", query_string: str = ""
     return f"Bearer {signing_input}.{signature_b64}"
 
 
+class UpstreamError(RuntimeError):
+    """An upstream Geizhals failure, already phrased for the caller. Tools turn
+    it into ``{"error": ...}`` instead of leaking the internal url."""
+
+
+def _tool_errors(fn):
+    """Return upstream failures as ``{"error": ...}`` -- the shape ``get_product``
+    already used -- rather than raising a raw httpx error at the client."""
+    @functools.wraps(fn)
+    async def wrapper(*args, **kwargs):
+        try:
+            return await fn(*args, **kwargs)
+        except UpstreamError as exc:
+            return {"error": str(exc)}
+    return wrapper
+
+
 async def _post(endpoint: str, payload: dict) -> dict:
     """POST a signed request to a gh/v9 endpoint, retrying transient failures."""
     body = json.dumps(payload, separators=(",", ":")).encode()
@@ -115,16 +134,21 @@ async def _post(endpoint: str, payload: dict) -> dict:
     for attempt in range(MAX_RETRIES + 1):
         try:
             response = await client.post(url, content=body, headers=headers)
-        except httpx.TransportError:
+        except httpx.TransportError as exc:
             if attempt == MAX_RETRIES:
-                raise
+                raise UpstreamError(f"Could not reach Geizhals ({type(exc).__name__}).") from exc
         else:
             if response.status_code == 403:
-                raise RuntimeError(
-                    "Error"
+                raise UpstreamError(
+                    "Geizhals rejected the request signature (403) -- the app's "
+                    "signing credentials in main.py are most likely outdated."
                 )
             if response.status_code not in RETRYABLE_STATUS or attempt == MAX_RETRIES:
-                response.raise_for_status()
+                if response.status_code >= 400:
+                    raise UpstreamError(
+                        f"Geizhals rejected the '{endpoint}' request (HTTP "
+                        f"{response.status_code}); check the arguments you passed."
+                    )
                 return response.json()
         delay = 0.5 * (2 ** attempt)
         logger.warning("Request to '%s' failed (attempt %d/%d), retrying in %.1fs",
@@ -168,9 +192,13 @@ def _leaf_cat(categories: Optional[list]) -> Optional[str]:
 # ---------------------------------------------------------------------------
 # Categories (shipped tree, like the marketplace category tree)
 # ---------------------------------------------------------------------------
+def _fold(s: str) -> str:
+    """Lowercase and strip diacritics, so "Grafikkarte" and "GRAFIKKARTE" match."""
+    return unicodedata.normalize("NFKD", str(s)).encode("ascii", "ignore").decode().lower()
+
+
 def _norm(s: str) -> str:
-    s = unicodedata.normalize("NFKD", str(s)).encode("ascii", "ignore").decode()
-    return "".join(s.lower().split())
+    return "".join(_fold(s).split())
 
 
 def _load_categories() -> list[dict]:
@@ -219,6 +247,20 @@ def _to_float(value) -> Optional[float]:
         return None
 
 
+def _iso_date(ts) -> Optional[str]:
+    """Geizhals timestamp (seconds, or milliseconds in history series) -> ISO date."""
+    if not isinstance(ts, (int, float)):
+        return None
+    seconds = ts / 1000 if ts > 10 ** 11 else ts
+    try:
+        return datetime.fromtimestamp(seconds, timezone.utc).date().isoformat()
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
+_DE_DATE_RE = re.compile(r"^(\d{2})\.(\d{2})\.(\d{4})$")
+
+
 def _clean_html(value):
     """Strip the raw HTML Geizhals embeds in comparison spec values
     (``<a href=...>``, ``<br>``, entities) down to plain text."""
@@ -226,43 +268,82 @@ def _clean_html(value):
         return value
     text = re.sub(r"<br\s*/?>", " / ", value, flags=re.IGNORECASE)
     text = re.sub(r"<[^>]+>", "", text)
-    return re.sub(r"\s+", " ", html.unescape(text)).strip()
+    text = re.sub(r"\s+", " ", html.unescape(text)).strip()
+    # spec values carry dates as dd.mm.yyyy on one code path and ISO on another
+    match = _DE_DATE_RE.match(text)
+    return f"{match[3]}-{match[2]}-{match[1]}" if match else text
 
 
-def _summarize_search_hit(p: dict) -> dict:
+def _site(loc: str) -> str:
+    """The country site the ids/links of a `loc` belong to. Geizhals serves .at,
+    .de, .eu, .co.uk, .pl and .sk from the same catalogue."""
+    return {"at": "geizhals.at", "de": "geizhals.de", "eu": "geizhals.eu",
+            "uk": "skinflint.co.uk", "pl": "geizhals.pl", "sk": "geizhals.sk"}.get(loc, "geizhals.at")
+
+
+def _best_shop(p: dict) -> Optional[str]:
+    for offer in p.get("offers") or []:
+        name = ((offer or {}).get("shop") or {}).get("name")
+        if name:
+            return name
+    return None
+
+
+def _summarize_search_hit(p: dict, site: str = "geizhals.at") -> dict:
     urls = p.get("urls") or {}
+    prices = p.get("prices") or {}
+    best_price = _to_float(prices.get("best"))
+    offer_count = p.get("offer_count")
     return {
         "id": p.get("gzhid"),
-        "name": p.get("product") or p.get("product_for_sort"),
+        "name": _clean_html(p.get("product") or p.get("product_for_sort")),
         "manufacturer": p.get("manufacturer_name"),
-        "category": [c.get("label") for c in p.get("category", []) if isinstance(c, dict)],
+        # uncategorised hits (Amazon passthrough listings) carry category: null
+        "category": [c.get("label") for c in (p.get("category") or []) if isinstance(c, dict)],
         "category_code": _leaf_cat(p.get("category")),
+        "best_price": best_price,
+        "avg_price": _to_float(prices.get("avg")),
+        "offer_count": offer_count,
+        "available": bool(best_price is not None and (offer_count or 0) > 0),
+        "shop": _best_shop(p),
         "image": (_image_urls(p.get("images")) or [None])[0],
-        "url": f"https://geizhals.at{urls.get('overview')}" if urls.get("overview") else None,
+        "url": f"https://{site}{urls.get('overview')}" if urls.get("overview") else None,
         "listed_since": p.get("listed_since"),
     }
 
 
-def _summarize_product(p: dict) -> dict:
+def _summarize_product(p: dict, site: str = "geizhals.at") -> dict:
     urls = p.get("urls") or {}
     bp = p.get("bestprices") or {}
+    prices = p.get("prices") or {}
+    best_price = _to_float(prices.get("best"))
+    offer_count = p.get("offer_count")
     return {
         "id": p.get("gzhid"),
         "variant_id": p.get("variant_id"),
-        "name": p.get("product_for_sort"),
+        "name": _clean_html(p.get("product_for_sort") or p.get("product")),
         "manufacturer": p.get("manufacturer_name"),
+        "category": [c.get("label") for c in (p.get("category") or []) if isinstance(c, dict)],
+        "category_code": _leaf_cat(p.get("category")),
+        "best_price": best_price,
+        "avg_price": _to_float(prices.get("avg")),
+        "offer_count": offer_count,
+        "available": bool(best_price is not None and (offer_count or 0) > 0),
+        "shop": _best_shop(p),
+        "listed_since": p.get("listed_since"),
+        "variant_count": p.get("variant_count"),
         "rating_stars": p.get("rating_stars"),
         "rating_percent": p.get("rating_percent"),
         "rating_comments": p.get("rating_comments"),
         "rating_count": p.get("rating_count"),
         # bestprices is the observed range over the product's whole listed
         # history, not the price on offer today.
-        "historic_price_min": bp.get("min"),
-        "historic_price_max": bp.get("max"),
-        "historic_first_seen": bp.get("first"),
-        "historic_last_seen": bp.get("last"),
+        "alltime_price_min": bp.get("min"),
+        "alltime_price_max": bp.get("max"),
+        "alltime_first_date": _iso_date(bp.get("first")),
+        "alltime_last_date": _iso_date(bp.get("last")),
         "images": _image_urls(p.get("images")),
-        "offers_url": f"https://geizhals.at{urls.get('offers')}" if urls.get("offers") else None,
+        "offers_url": f"https://{site}{urls.get('offers')}" if urls.get("offers") else None,
         "test_reviews": len(p.get("test_reviews") or []),
     }
 
@@ -271,7 +352,7 @@ def _summarize_deal(d: dict) -> dict:
     img = d.get("image_thumb")
     return {
         "id": d.get("id"),
-        "name": d.get("product"),
+        "name": _clean_html(d.get("product")),
         "manufacturer": d.get("manufacturer_name"),
         "category": d.get("category_path") or d.get("cat_name"),
         "change_percent": d.get("change_in_percent"),
@@ -295,12 +376,15 @@ def _summarize_category_hit(p: dict) -> dict:
     """Normalize a categorylist product into the same shape the other tools
     return (categorylist ships raw, inconsistent fields otherwise)."""
     pricing = p.get("pricing") or {}
+    best_price = _to_float(p.get("best_price"))
+    offer_count = p.get("offer_count")
     return {
         "id": p.get("id"),
-        "name": p.get("product_for_sort") or p.get("product"),
-        "best_price": p.get("best_price"),
+        "name": _clean_html(p.get("product_for_sort") or p.get("product")),
+        "best_price": best_price,
         "currency": pricing.get("loc_currency"),
-        "offer_count": p.get("offer_count"),
+        "offer_count": offer_count,
+        "available": bool(best_price is not None and (offer_count or 0) > 0),
         "rating_stars": p.get("rating_stars"),
         "rating_percent": p.get("rating_percent"),
         "rating_count": p.get("rating_count"),
@@ -348,10 +432,27 @@ def _summarize_compare(p: dict, price_map: dict) -> dict:
     }
 
 
+async def _search_products(query: str, *, loc: str, hloc, lang: str, category=None,
+                           manufacturer=None, sort: str = "", rows: int = 10,
+                           offset: int = 0) -> dict:
+    """Raw product search (shared by the search tool and the model/match tools)."""
+    payload = {
+        "query": query,
+        "params": _params(loc, hloc, lang=lang, offset=offset, pagesize=_page_size(rows), n_offers=1,
+                          bestprice_extrema=0, add_popularity=False,
+                          filter_category=category or "", filter_manufacturer=manufacturer or 0,
+                          add_ratings=1, show_parent_category=1, category_suggestions=1,
+                          sort=sort, category_suggestions_details=1, add_asin=1,
+                          allow_other_hloc=1, has_variants=0),
+    }
+    return (await _post("search_product", payload)).get("response") or {}
+
+
 # ---------------------------------------------------------------------------
 # Tools
 # ---------------------------------------------------------------------------
 @mcp.tool()
+@_tool_errors
 async def search_geizhals(
     query: str,
     *,
@@ -368,13 +469,20 @@ async def search_geizhals(
     "rtx 4070". This is the main entry point for finding products -- start
     here unless you already have a product id or category code.
 
-    Returns ``{total, results: [...], facets}``. ``results`` are summarized
-    hits (id, name, manufacturer, category, image, url) -- call
-    ``get_product`` with a hit's ``id`` for full details (price, rating,
-    offers). ``facets`` lists the categories and manufacturers present in the
-    full result set with counts, plus the overall ``price_range`` -- use
-    these to decide values for ``category`` / ``manufacturer`` on a follow-up,
-    narrower call rather than guessing ids.
+    Returns ``{total, results: [...], facets}``. Each hit already carries its
+    current ``best_price``, ``offer_count``, cheapest ``shop`` and an
+    ``available`` flag, so a plain "what does X cost" needs no follow-up call;
+    go to ``get_product`` for ratings, images and the all-time price range, to
+    ``get_price_history`` for the trend, and to ``compare_products`` for specs.
+    A hit with ``available: false`` has no live offers (discontinued or
+    temporarily unlisted) -- ``get_price_history`` still gives its last known
+    price.
+
+    ``facets`` lists the categories and manufacturers present in the full
+    result set with counts -- use these to decide values for ``category`` /
+    ``manufacturer`` on a follow-up, narrower call rather than guessing ids.
+    ``facets.price_range`` comes from Geizhals' own filter widget and its
+    ``min`` is usually 0; take the hits' ``best_price`` as the real range.
 
     Args:
         query: Free-text search term.
@@ -393,48 +501,70 @@ async def search_geizhals(
         rows: Max results to return (page size). Default 10.
         offset: Paging offset into the result set. Default 0.
     """
-    payload = {
-        "query": query,
-        "params": _params(loc, hloc, lang=lang, offset=offset, pagesize=_page_size(rows), n_offers=1,
-                          bestprice_extrema=0, add_popularity=False,
-                          filter_category=category or "", filter_manufacturer=manufacturer or 0,
-                          add_ratings=1, show_parent_category=1, category_suggestions=1,
-                          sort=sort, category_suggestions_details=1, add_asin=1,
-                          allow_other_hloc=1, has_variants=0),
-    }
-    data = (await _post("search_product", payload)).get("response", {})
-    facets = data.get("facet_aggregates", {})
+    data = await _search_products(query, loc=loc, hloc=hloc, lang=lang, category=category,
+                                  manufacturer=manufacturer, sort=sort, rows=rows, offset=offset)
+    # every list below can come back as an explicit null (no hits, uncategorised
+    # hits, no facets), so `or []` rather than a dict default
+    facets = data.get("facet_aggregates") or {}
+    site = _site(loc)
     return {
         "total": data.get("total"),
-        "results": [_summarize_search_hit(p) for p in data.get("products", [])[:rows]],
+        "results": [_summarize_search_hit(p, site) for p in (data.get("products") or [])[:rows]],
         "facets": {
             "categories": [{"id": c.get("id"), "name": c.get("name"), "count": c.get("count")}
-                           for c in facets.get("categories", [])],
+                           for c in (facets.get("categories") or [])],
             "manufacturers": [{"id": m.get("id"), "name": m.get("name"), "count": m.get("count")}
-                              for m in facets.get("manufacturer", [])],
+                              for m in (facets.get("manufacturer") or [])],
             "price_range": facets.get("price_range"),
         },
     }
 
 
+async def _last_known_price(product_id: Union[int, str], loc: str) -> dict:
+    """Last recorded price of a product that has no live offers, so a
+    discontinued product still gives an agent something to compare against
+    instead of a bare null."""
+    try:
+        data = await _post("price_history", {"id": int(product_id),
+                                             "params": {"days": 365, "loc": loc, "hloc": []}})
+    except (UpstreamError, ValueError, TypeError):
+        return {}
+    for point in reversed(data.get("response") or []):
+        if isinstance(point, list) and len(point) >= 2 and point[1] is not None:
+            date = _iso_date(point[0])
+            days = None
+            if date:
+                days = (datetime.now(timezone.utc).date() - datetime.fromisoformat(date).date()).days
+            return {"last_known_price": _to_float(point[1]), "last_known_date": date,
+                    "days_since_last_price": days}
+    return {}
+
+
 @mcp.tool()
+@_tool_errors
 async def get_product(product_id: Union[int, str], *, loc: Country = "at",
                       hloc: Optional[list[Country]] = None,
                       lang: Literal["en", "de"] = "en", n_offers: int = 20) -> dict:
     """Look up full detail for a single product you already have the Geizhals
     id for (from ``search_geizhals`` or ``browse_category`` results). Returns
-    name, manufacturer, rating (stars/percent/comment count), image urls, a
-    link to the shop offers, and how many test reviews exist. The
-    ``historic_price_*`` fields are the range observed over the product's whole
-    listed history (with the first/last timestamps), not today's price -- for
-    the current best price use ``get_price_history`` (``last_price``) or
-    ``compare_products``; for review text use ``get_product_ratings``.
+    the current ``best_price`` / ``offer_count`` / cheapest ``shop``, name,
+    manufacturer, category, rating, image urls, a link to the shop offers, and
+    how many test reviews exist.
+
+    ``status`` is "available" or "unavailable"; the ``alltime_*`` fields are the
+    range observed over the product's whole listed history, not today's price.
+    When a product has no live offers (discontinued or temporarily unlisted)
+    this adds ``last_known_price`` / ``last_known_date`` /
+    ``days_since_last_price`` from the price history, so an EOL product is still
+    comparable instead of a bare null. For the trend use ``get_price_history``,
+    for specs ``compare_products``, for review text ``get_product_ratings``.
 
     Args:
         product_id: The Geizhals product id (``gzhid``), e.g. from a search
             hit's ``id`` field.
         loc: Country site for pricing: "at", "de", "eu", "uk", "pl" or "sk".
         hloc: Which shop countries' offers to include; defaults to ``[loc]``.
+        lang: Display language for names/labels, "en" (default) or "de".
         n_offers: Max number of individual shop offers to consider for the
             best-price calculation. Default 20.
     """
@@ -445,19 +575,44 @@ async def get_product(product_id: Union[int, str], *, loc: Country = "at",
                           bestprice_extrema=True, review_details=1, test_reviews=True,
                           image_size="n"),
     }
-    response = (await _post("query_product", payload)).get("response", [])
+    response = (await _post("query_product", payload)).get("response") or []
     if not response:
         return {"error": f"no product for id {product_id}"}
-    return _summarize_product(response[0])
+    product = _summarize_product(response[0], _site(loc))
+    product["status"] = "available" if product["available"] else "unavailable"
+    if not product["available"]:
+        product.update(await _last_known_price(product_id, loc))
+    return product
+
+
+def _weekly(points: list) -> list:
+    """Downsample a daily series to one point per ISO week (the week's last)."""
+    by_week: dict = {}
+    for date, price in points:
+        by_week[datetime.fromisoformat(date).isocalendar()[:2]] = [date, price]
+    return list(by_week.values())
 
 
 @mcp.tool()
+@_tool_errors
 async def get_price_history(product_id: Union[int, str], *, days: int = 31,
-                            loc: Country = "at") -> dict:
-    """Price history for a product, to answer "has this gotten cheaper /
-    should I wait" type questions. Returns ``{meta, series}``: ``meta`` has
-    the min/max/current-best summary; ``series`` is the raw list of
-    ``[timestamp_ms, price, flag]`` points over the requested window.
+                            loc: Country = "at", include_series: bool = True,
+                            granularity: Literal["day", "week"] = "day") -> dict:
+    """Price history for a product, to answer "has this gotten cheaper / should
+    I wait" type questions, and to price a product that is no longer on sale.
+
+    The summary fields keep window and all-time values strictly apart:
+    ``window_min`` / ``window_max`` / ``window_avg`` / ``window_change_percent``
+    describe the requested window only, while ``alltime_min`` / ``alltime_max``
+    / ``alltime_first_date`` / ``alltime_last_date`` cover the product's whole
+    listed history. ``status`` is "available" or "unavailable"; for an
+    unavailable (discontinued or unlisted) product ``last_price`` plus
+    ``days_since_last_price`` tell you how stale the last data point is -- a
+    large number there means the price is historical, not current.
+
+    A full daily ``series`` is a few thousand tokens; if you only need the
+    summary, pass ``include_series=False``, and prefer
+    ``granularity="week"`` for long windows.
 
     Args:
         product_id: The Geizhals product id (``gzhid``).
@@ -466,26 +621,56 @@ async def get_price_history(product_id: Union[int, str], *, days: int = 31,
             snapped to the nearest one. Default 31.
         loc: Country site the prices are shown for: "at", "de", "eu", "uk",
             "pl" or "sk".
+        include_series: Include the per-point ``series`` of
+            ``[iso_date, price]`` pairs. Default True; set False for just the
+            summary. ``points`` counts the daily observations in the window
+            regardless, so it stays comparable across both settings.
+        granularity: "day" (default, one point per day) or "week" (one point
+            per ISO week, the week's last price).
     """
     window = min(HISTORY_WINDOWS, key=lambda w: abs(w - days))
     payload = {"id": int(product_id), "params": {"days": window, "loc": loc, "hloc": []}}
     data = await _post("price_history", payload)
-    series = data.get("response") or []
-    # meta.current_best is the live best offer and can be null when the product
-    # is momentarily unavailable; expose the last recorded price separately so a
-    # null current_best next to a filled min/max isn't mistaken for missing data.
-    last_price = last_ts = None
-    for point in reversed(series):
-        if len(point) >= 2 and point[1] is not None:
-            last_ts, last_price = point[0], point[1]
-            break
-    return {"window_days": window, "last_price": last_price, "last_price_ts": last_ts,
-            "meta": data.get("meta"), "series": series}
+    meta = data.get("meta") or {}
+    points = [[_iso_date(p[0]), _to_float(p[1])] for p in (data.get("response") or [])
+              if isinstance(p, list) and len(p) >= 2 and p[1] is not None]
+    prices = [p[1] for p in points]
+
+    # meta.current_best is the live best offer and is null once a product stops
+    # being offered; the series still holds what it last cost.
+    current_best = _to_float(meta.get("current_best"))
+    last_date, last_price = points[-1] if points else (None, None)
+    stale = ((datetime.now(timezone.utc).date() - datetime.fromisoformat(last_date).date()).days
+             if last_date else None)
+
+    result = {
+        "window_days": window,
+        "points": len(points),
+        "status": "available" if current_best is not None else "unavailable",
+        "current_best": current_best,
+        "last_price": last_price,
+        "last_price_date": last_date,
+        "days_since_last_price": stale,
+        "window_min": min(prices) if prices else None,
+        "window_max": max(prices) if prices else None,
+        "window_avg": round(sum(prices) / len(prices), 2) if prices else None,
+        "window_change_percent": (round((prices[-1] - prices[0]) / prices[0] * 100, 1)
+                                  if len(prices) > 1 and prices[0] else None),
+        "alltime_min": _to_float(meta.get("min")),
+        "alltime_max": _to_float(meta.get("max")),
+        "alltime_first_date": _iso_date(meta.get("first_ts")),
+        "alltime_last_date": _iso_date(meta.get("last_ts")),
+    }
+    if include_series:
+        result["series"] = _weekly(points) if granularity == "week" else points
+    return result
 
 
 @mcp.tool()
+@_tool_errors
 async def get_product_ratings(product_id: Union[int, str], *, rows: int = 10,
-                              sort: Literal["latest", "helpful"] = "latest") -> dict:
+                              sort: Literal["latest", "helpful"] = "latest",
+                              loc: Country = "at") -> dict:
     """Aggregate user ratings for a product: average rating, total count,
     and the count per star (1-5). Returns a ``reviews_url`` link rather than
     the individual review texts.
@@ -495,6 +680,8 @@ async def get_product_ratings(product_id: Union[int, str], *, rows: int = 10,
         rows: Max number of underlying reviews Geizhals aggregates over.
             Default 10.
         sort: "latest" (default) or "helpful".
+        loc: Country site the ``reviews_url`` should point at: "at", "de",
+            "eu", "uk", "pl" or "sk". Default "at".
     """
     payload = {
         "product_id": int(product_id), "filter_ghonly": 0, "offset": 0,
@@ -507,16 +694,21 @@ async def get_product_ratings(product_id: Union[int, str], *, rows: int = 10,
     total = data.get("total_star_ratings")
     if not total and per_star:
         total = sum(v for v in per_star.values() if isinstance(v, (int, float)))
+    # the endpoint always answers with a geizhals.de url, whatever loc says
+    url = data.get("ratings_url")
+    if url:
+        url = re.sub(r"^https://[^/]+", f"https://{_site(loc)}", url)
     return {
-        "product_name": data.get("product_name"),
+        "product_name": _clean_html(data.get("product_name")),
         "average": data.get("aggregate_star_rating"),
         "total": total,
         "per_star": per_star,
-        "reviews_url": data.get("ratings_url"),
+        "reviews_url": url,
     }
 
 
 @mcp.tool()
+@_tool_errors
 async def browse_category(category: str, *, loc: Country = "at",
                           hloc: Optional[list[Country]] = None,
                           lang: Literal["en", "de"] = "en", sort: Sort = "t",
@@ -540,12 +732,21 @@ async def browse_category(category: str, *, loc: Country = "at",
         rows: Max results to return (page size). Default 20.
         offset: Paging offset into the result set. Default 0.
     """
+    if price_min is not None and price_max is not None and price_min > price_max:
+        raise ValueError(f"price_min ({price_min}) is above price_max ({price_max}); swap them.")
     params = _params(loc, hloc, lang=lang, offset=offset, pagesize=_page_size(rows), sort=sort,
                      deals_as_array=1, add_metadata=True, asd=False, price_range=1,
                      bpmin=price_min or 0.0, bpmax=price_max or 250000.0,
                      reverse_order=0, t="alle", v="e", vl=loc, xf="", asuch="",
                      hide_deals=0, omit_description=1, allow_other_hloc=1, new_filters=0)
-    data = (await _post("categorylist", {"category": category, "params": params})).get("response", {})
+    try:
+        response = await _post("categorylist", {"category": category, "params": params})
+    except UpstreamError as exc:
+        raise UpstreamError(
+            f"{exc} '{category}' is probably not a valid category code -- use "
+            f"list_categories to look one up."
+        ) from exc
+    data = response.get("response") or {}
     products = data.get("productlist") or data.get("products") or []
     return {
         "category": category,
@@ -555,16 +756,21 @@ async def browse_category(category: str, *, loc: Country = "at",
 
 
 @mcp.tool()
+@_tool_errors
 async def compare_products(product_ids: list[Union[int, str]], *, loc: Country = "at",
                            lang: Literal["en", "de"] = "en") -> dict:
     """Compare several products side by side, e.g. to help the user pick
     between a shortlist of alternatives. Returns ``{products: [...]}`` where
     each product has its name, manufacturer, best price, rating and a
     ``specs`` map (property -> value) with the HTML Geizhals embeds stripped
-    out. Pricing missing from the comparison response is backfilled from
-    ``products_details``; ``available`` is false when a product genuinely has
+    out and dates normalized to ISO.
+
+    Pricing missing from the comparison response is backfilled from
+    ``products_details``. ``available`` is false when a product genuinely has
     no current offers (discontinued or temporarily unlisted), so a null price
-    is distinguishable from a lookup failure.
+    is distinguishable from a lookup failure -- for those, ``last_known_price``
+    and ``last_known_date`` are filled in from the price history so an EOL
+    product can still be compared against a used-market price.
 
     Args:
         product_ids: The Geizhals product ids (``gzhid``) to compare; pass two
@@ -602,10 +808,26 @@ async def compare_products(product_ids: list[Union[int, str]], *, loc: Country =
     except Exception:
         logger.warning("products_details pricing backfill failed for compare_products", exc_info=True)
 
-    return {"products": [_summarize_compare(p, price_map) for p in products]}
+    compared = [_summarize_compare(p, price_map) for p in products]
+    # a product with no live offers is exactly the EOL case a used-market
+    # comparison cares about -- give it its last known price instead of a null
+    unavailable = [p for p in compared if not p["available"] and p.get("id")]
+    for product, last in zip(unavailable, await asyncio.gather(
+            *(_last_known_price(p["id"], loc) for p in unavailable))):
+        product["status"] = "unavailable"
+        product.update(last)
+    for product in compared:
+        product.setdefault("status", "available" if product["available"] else "unavailable")
+    return {"products": compared}
+
+
+# bestprice_development has no offset, so filtering and sorting can only ever
+# work over one fetched page -- take a generous one and trim it down locally.
+DEALS_POOL = 300
 
 
 @mcp.tool()
+@_tool_errors
 async def get_deals(
     *,
     sort: Literal["percent", "price", "latest", "popularity", "top"] = "percent",
@@ -613,6 +835,7 @@ async def get_deals(
     hloc: Optional[list[Country]] = None,
     lang: Literal["en", "de"] = "en",
     min_discount_percent: Optional[float] = None,
+    max_price: Optional[float] = None,
     limit: int = 20,
 ) -> dict:
     """Current Geizhals price drops ("Schnaeppchen" / Bestpreis-Entwicklung):
@@ -623,27 +846,41 @@ async def get_deals(
     Returns ``{count, deals: [...]}``. Each deal carries ``change_percent``
     (negative = cheaper, e.g. -10.0) and ``change_amount`` next to the
     ``old_price`` / ``best_price``, plus ``alltime_best`` and ``top_deal``
-    flags. Filtering and ordering are applied here over the fetched set.
+    flags.
+
+    ``limit`` is a target number of *matching* deals, not a fetch size: a large
+    pool is always fetched and filtered/sorted locally, so a filter no longer
+    shrinks the result below ``limit`` while matches remain. ``scanned`` says
+    how many deals that pool held and ``top_deal_count`` how many of them
+    Geizhals flagged as a top deal -- with ``sort="top"`` and
+    ``top_deal_count: 0`` there simply were none, which is not the same as the
+    sort having no effect.
 
     Args:
         sort: How to order the deals -- "percent" (biggest % drop, default),
             "price" (cheapest best_price), "latest" (most recently changed),
             "popularity" (most popular products first) or "top" (Geizhals'
-            top_deal flag first).
+            top_deal flag first, biggest drop within that).
         loc: Country site for pricing: "at", "de", "eu", "uk", "pl" or "sk".
         hloc: Which shop countries' offers to include; defaults to ``[loc]``.
         lang: Display language for names/labels, "en" (default) or "de".
         min_discount_percent: Only keep deals that dropped at least this many
             percent, e.g. 15 for "-15% or better". Omit for no floor.
-        limit: Max number of deals to fetch and return. Default 20.
+        max_price: Only keep deals whose current ``best_price`` is at or below
+            this. Omit for no cap.
+        limit: Target number of matching deals to return. Default 20.
     """
-    params = _params(loc, hloc, lang=lang, limit=limit, price_range=1)
-    data = (await _post("bestprice_development", {"params": params})).get("response", {})
-    deals = [_summarize_deal(d) for d in data.get("deals", [])]
+    params = _params(loc, hloc, lang=lang, limit=max(limit, DEALS_POOL), price_range=1)
+    data = (await _post("bestprice_development", {"params": params})).get("response") or {}
+    deals = [_summarize_deal(d) for d in (data.get("deals") or [])]
+    scanned = len(deals)
+    top_deal_count = sum(1 for d in deals if d["top_deal"])
 
     if min_discount_percent is not None:
         floor = -abs(min_discount_percent)
         deals = [d for d in deals if (d.get("change_percent") or 0) <= floor]
+    if max_price is not None:
+        deals = [d for d in deals if d["best_price"] is not None and d["best_price"] <= max_price]
 
     if sort == "percent":
         deals.sort(key=lambda d: d["change_percent"] if d["change_percent"] is not None else 0)
@@ -657,8 +894,212 @@ async def get_deals(
         deals.sort(key=lambda d: (0 if d["top_deal"] else 1,
                                   d["change_percent"] if d["change_percent"] is not None else 0))
 
+    matched = len(deals)
     deals = deals[:limit]
-    return {"count": len(deals), "deals": deals}
+    return {"count": len(deals), "matched": matched, "scanned": scanned,
+            "total_available": data.get("total"), "top_deal_count": top_deal_count,
+            "deals": deals}
+
+
+# ---------------------------------------------------------------------------
+# Model pricing & listing matching
+# ---------------------------------------------------------------------------
+_TOKEN_RE = re.compile(r"[a-z0-9]+")
+# Ad titles fuse the series and the model number ("RTX5070", "GTX1080"); Geizhals
+# always spaces them. Split those so the two sides are comparable.
+_FUSED_RE = re.compile(r"^([a-z]{2,4})(\d{3,5})$")
+
+# Words a marketplace ad title carries but a Geizhals product name never does.
+# Dropping them is what makes the token overlap between the two comparable.
+_AD_NOISE = {
+    "neu", "neuwertig", "gebraucht", "defekt", "ovp", "originalverpackt", "verpackung",
+    "rechnung", "garantie", "gewahrleistung", "versand", "abholung", "selbstabholung",
+    "reserviert", "verkauft", "vb", "fixpreis", "np", "wie", "sehr", "gut", "guter",
+    "zustand", "wenig", "kaum", "benutzt", "genutzt", "gunstig", "verkaufe", "verkauf",
+    "biete", "inkl", "und", "mit", "fur", "der", "die", "das", "eur", "euro", "stk",
+    "neuwertiger", "top", "voll", "funktionsfahig", "originalverpackung",
+}
+
+# Tokens that separate one model from its sibling. A candidate that carries one
+# the query does not (or the other way round) is a different product, not a
+# near miss -- "4070" vs "4070 Ti" vs "4070 Super".
+_VARIANT_TOKENS = {"ti", "super", "xt", "xtx", "pro", "max", "plus", "ultra", "mini", "le"}
+
+
+def _title_tokens(text: str) -> list[str]:
+    """Comparable tokens of a product name or ad title: folded, de-noised, with
+    fused series+number tokens split apart."""
+    out = []
+    for token in _TOKEN_RE.findall(_fold(text or "")):
+        if len(token) < 2 or token in _AD_NOISE:
+            continue
+        fused = _FUSED_RE.match(token)
+        out.extend(fused.groups() if fused else [token])
+    return out
+
+
+def _match_score(query: set, name: str) -> float:
+    """Heuristic 0-1 confidence that `name` is the same product as the query
+    tokens: how much of the query the name covers, discounted when the name
+    carries extra words, and heavily discounted on a model-number or
+    variant-marker mismatch."""
+    candidate = set(_title_tokens(name))
+    if not query or not candidate:
+        return 0.0
+    covered = query & candidate
+    if not covered:
+        return 0.0
+    # Geizhals appends the specs after the first comma ("..., 12GB GDDR7, HDMI");
+    # score how specific the match is against the name proper, not that tail.
+    head = set(_title_tokens((name or "").split(",")[0])) or candidate
+    score = len(covered) / len(query) * (0.75 + 0.25 * len(query & head) / len(head))
+    numbers = {t for t in query if t.isdigit()}
+    if numbers and not numbers <= candidate:
+        score *= 0.4
+    if (_VARIANT_TOKENS & candidate) ^ (_VARIANT_TOKENS & query):
+        score *= 0.5
+    return round(min(score, 1.0), 3)
+
+
+def _median(values: list[float]) -> Optional[float]:
+    if not values:
+        return None
+    ordered = sorted(values)
+    mid = len(ordered) // 2
+    return ordered[mid] if len(ordered) % 2 else round((ordered[mid - 1] + ordered[mid]) / 2, 2)
+
+
+@mcp.tool()
+@_tool_errors
+async def get_model_price_range(
+    model: str,
+    *,
+    category: Optional[str] = None,
+    loc: Country = "at",
+    hloc: Optional[list[Country]] = None,
+    max_variants: int = 60,
+) -> dict:
+    """What a *model* costs right now across all its board partner / vendor
+    variants -- "what does an RTX 5070 go for", not "what does the Zotac Twin
+    Edge OC go for". This is the number you want when pricing a used item
+    against the new market; doing it by hand would mean a search, picking the
+    variants out yourself and a ``compare_products`` call.
+
+    Returns ``{min, median, max, variants, available, cheapest: [...]}`` over
+    every listed variant whose name contains all of the ``model`` words. ``min``
+    is the cheapest live offer for the model, ``variants`` how many variants
+    matched and ``available`` how many of those are actually on sale.
+    ``cheapest`` lists the five cheapest with their ids, so you can go straight
+    into ``get_product`` / ``get_price_history`` from here.
+
+    Args:
+        model: The model as people write it, e.g. "RTX 5070", "iPhone 15 Pro"
+            or "Ryzen 7 7800X3D". All words must appear in a variant's name, so
+            keep it to the model itself and leave vendor/edition words out.
+        category: Optional category code to scope to (from ``list_categories``
+            or a search hit's ``category_code``) -- worth passing when the model
+            name also appears in other categories, e.g. graphics cards showing
+            up inside prebuilt systems.
+        loc: Country site for pricing: "at", "de", "eu", "uk", "pl" or "sk".
+        hloc: Which shop countries' offers to include; defaults to ``[loc]``.
+        max_variants: How many hits to consider, cheapest first. Default 60,
+            max 100 -- with more listed variants than that the ``max`` and
+            ``median`` describe the cheapest ``max_variants`` only.
+    """
+    max_variants = max(1, min(int(max_variants), 100))
+    data = await _search_products(model, loc=loc, hloc=hloc, lang="en", category=category,
+                                  sort="p", rows=max_variants)
+    site = _site(loc)
+    wanted = set(_title_tokens(model))
+    hits = [_summarize_search_hit(p, site) for p in (data.get("products") or [])[:max_variants]]
+    # The free-text search is fuzzy, so keep only variants that really carry the
+    # model -- and drop the siblings a model name subsumes: "RTX 4070" must not
+    # be priced off a 4070 Ti or a 4070 Super.
+    variants = []
+    for hit in hits:
+        tokens = set(_title_tokens(hit["name"] or ""))
+        if wanted <= tokens and not (_VARIANT_TOKENS & tokens) - wanted:
+            variants.append(hit)
+    prices = [h["best_price"] for h in variants if h["available"] and h["best_price"] is not None]
+    cheapest = sorted((h for h in variants if h["available"]), key=lambda h: h["best_price"])
+    result = {
+        "model": model,
+        "min": min(prices) if prices else None,
+        "median": _median(prices),
+        "max": max(prices) if prices else None,
+        "variants": len(variants),
+        "available": len(prices),
+        "considered": len(hits),
+        "total_hits": data.get("total"),
+        "cheapest": [{"id": h["id"], "name": h["name"], "best_price": h["best_price"],
+                      "offer_count": h["offer_count"], "shop": h["shop"]} for h in cheapest[:5]],
+    }
+    if not variants and hits:
+        result["note"] = (f"No variant of exactly '{model}' is listed -- the hits were all "
+                          f"sibling models (e.g. {hits[0]['name']}). The model is most likely "
+                          f"discontinued; get_price_history on one of them gives its last price.")
+    elif variants and not prices:
+        result["note"] = (f"All {len(variants)} listed variants are out of stock; use get_product "
+                          f"or get_price_history on one for its last known price.")
+    return result
+
+
+@mcp.tool()
+@_tool_errors
+async def match_geizhals(
+    title: str,
+    *,
+    category: Optional[str] = None,
+    loc: Country = "at",
+    hloc: Optional[list[Country]] = None,
+    limit: int = 5,
+) -> dict:
+    """Resolve a free-form listing title -- a willhaben/eBay/classifieds ad
+    headline, with all its noise -- to the Geizhals products it could be, each
+    with a confidence score. Use it as the bridge between a used listing and
+    its new price instead of hand-crafting a search query and eyeballing which
+    variant is the right one.
+
+    Returns ``{query, candidates: [...]}`` sorted by ``confidence`` (0-1, a
+    token-overlap heuristic, not a promise): roughly, >=0.8 is a safe match,
+    0.5-0.8 needs a look at the name, below that treat it as a guess. Number
+    and variant-marker mismatches ("4070" vs "4070 Ti") are scored down hard,
+    because those are different products rather than near misses. Each
+    candidate carries the live ``best_price`` / ``offer_count`` / ``available``,
+    so a match is usually the last call you need.
+
+    Args:
+        title: The listing title as written, e.g. "Gigabyte RTX 5070 Windforce
+            OC 12GB NEU OVP mit Rechnung". Condition, packaging and price words
+            are stripped out for you.
+        category: Optional Geizhals category code to scope to (from
+            ``list_categories``) -- worth passing when you know the product
+            type, it removes most of the wrong-category candidates.
+        loc: Country site for pricing: "at", "de", "eu", "uk", "pl" or "sk".
+        hloc: Which shop countries' offers to include; defaults to ``[loc]``.
+        limit: Max candidates to return. Default 5.
+    """
+    tokens = _title_tokens(title)
+    if not tokens:
+        return {"error": f"nothing searchable left in the title {title!r}"}
+    # long ad titles are mostly prose; the leading words carry the product
+    query = " ".join(tokens[:8])
+    site = _site(loc)
+    data = await _search_products(query, loc=loc, hloc=hloc, lang="en", category=category, rows=30)
+    products = data.get("products") or []
+    if not products and len(tokens) > 4:  # too specific -- retry on the head of the title
+        query = " ".join(tokens[:4])
+        data = await _search_products(query, loc=loc, hloc=hloc, lang="en", category=category, rows=30)
+        products = data.get("products") or []
+
+    wanted = set(tokens)
+    candidates = []
+    for hit in (_summarize_search_hit(p, site) for p in products):
+        score = _match_score(wanted, hit["name"] or "")
+        if score:
+            candidates.append({"confidence": score, **hit})
+    candidates.sort(key=lambda c: (-c["confidence"], c["best_price"] is None))
+    return {"query": query, "count": len(candidates), "candidates": candidates[:limit]}
 
 
 @mcp.tool()
