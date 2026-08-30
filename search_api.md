@@ -58,9 +58,9 @@ Most methods take a `params` object with:
 | Method | Body | Returns |
 |---|---|---|
 | `search_product` | `{query, params}` | `response.products[]`, `facet_aggregates` (categories, manufacturer, price_range), `total` |
-| `query_product` | `{query, type:"id", params}` | `response[]` full product (bestprices, rating, images, urls, test_reviews) |
+| `query_product` | `{query, type:"id", params}` | `response[]` full product (prices, bestprices, offer_count, rating, images, urls, test_reviews) |
 | `products_details` | `{id:[...], params}` | `response[]` best_price, offer_count, pricing, images |
-| `price_history` | `{id, params:{days, loc}}` | `response[] = [ts_ms, price, flag]`, `meta{min,max,last_ts,current_best}`. `days` must be one of 31/91/183/365 (else 400) |
+| `price_history` | `{id, params:{days, loc}}` | `response[] = [ts_ms, price, flag]`, `meta{min,max,first_ts,last_ts,current_best}`. `days` must be one of 31/91/183/365 (else 400) |
 | `query_product_ratings` | `{product_id, offset, pagesize, sort, params}` | aggregate_star_rating, per_star_rating_count, ... |
 | `query_variant` | `{variant, params}` | `response` variant offers |
 | `categorylist` | `{category:<code>, params}` | `response` products of a category |
@@ -71,6 +71,27 @@ Most methods take a `params` object with:
 
 There is also a `/usercontent/v0/*` namespace (price alarms, push settings,
 feedback) tied to a user account.
+
+## Response quirks
+
+- `search_product` hits carry the live price in `prices.best` / `prices.avg`
+  next to `offer_count` and `offers[].shop.name`, so a search already answers
+  "what does it cost" — `query_product` is only needed for ratings and images.
+- Uncategorised hits (Amazon passthrough listings) come back with
+  `category: null`, not `[]`, and their `product` name has raw `<br>` in it.
+  Zero-hit responses null out `products` and the facet lists the same way.
+- `price_history`'s `meta` is **all-time**, not window-scoped: `min`, `max`,
+  `first_ts` and `last_ts` describe the product's whole listed history even
+  when `days=31`. Only `response[]` respects the window.
+- `meta.current_best` is `null` once a product has no live offers; the series
+  still holds its last recorded price, which is the only way to price a
+  discontinued product.
+- `bestprice_development` honours `limit` (tested up to 300) but ignores
+  `offset`, so filtering and sorting can only work over one fetched page.
+- `query_product_ratings` always answers with a `geizhals.de` `ratings_url`,
+  whatever `loc` says.
+- `facet_aggregates.price_range.min` is the filter widget's floor and is
+  almost always `0`; it is not the cheapest hit.
 
 ## Categories
 

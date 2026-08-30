@@ -22,22 +22,31 @@ important fields to the AI.
 - **From keyword to category**  
   Search by free text or browse the **complete Geizhals category tree** (2200+ categories shipped with the server) to drill into exactly the right segment, then compare a shortlist side by side.
 
+- **Price a used listing**  
+  `match_geizhals` turns a classifieds ad headline into the Geizhals products it could be (with a confidence score), and `get_model_price_range` gives the new-price range across every variant of a model — the two numbers a "is this second-hand offer a deal" answer needs.
+
 ## Tools
 
 **`search_geizhals(query, ...)`**
 
 Search products by keyword. Filters for country (`loc`/`hloc`), category and
-manufacturer, plus sorting and paging. Returns the hits and facet aggregates
-(categories, manufacturers, price range) to refine with.
+manufacturer, plus sorting and paging. Every hit carries its current
+`best_price`, `offer_count`, cheapest `shop` and an `available` flag, so a plain
+price question needs no follow-up call. Also returns facet aggregates
+(categories, manufacturers) to refine with.
 
 **`get_product(product_id)`**
 
-Full detail of one product: name, rating, best-price range, images, offer link
-and how many test reviews it has.
+Full detail of one product: current best price and offer count, name, category,
+rating, images, offer link, all-time price range and test-review count. A
+product with no live offers gets its `last_known_price` / `last_known_date`
+filled in instead of a bare `null`.
 
 **`get_price_history(product_id, days=31)`**
 
-The min/max/current summary plus the raw `[timestamp, price, flag]` series.
+Window (`window_min/max/avg/change_percent`) and all-time (`alltime_min/max`)
+summaries kept strictly apart, plus a `[iso_date, price]` series.
+`include_series=False` and `granularity="week"` keep long windows cheap.
 
 **`get_product_ratings(product_id)`**
 
@@ -49,14 +58,27 @@ List the products in a category by its code, with price range and sorting.
 
 **`compare_products(product_ids)`**
 
-Compare several products side by side.
+Compare several products side by side, specs included. Discontinued products
+carry their last known price.
 
 **`get_deals(sort="percent", ...)`**
 
-Current price drops: products
-whose best price just fell, with the percent and amount off. Sort by biggest
-`percent` drop, `price`, `latest`, `popularity` or `top` deals, and filter with
-`min_discount_percent`.
+Current price drops: products whose best price just fell, with the percent and
+amount off. Sort by biggest `percent` drop, `price`, `latest`, `popularity` or
+`top` deals, and filter with `min_discount_percent` / `max_price`. `limit` is a
+target number of matches, not a fetch size.
+
+**`get_model_price_range(model, ...)`**
+
+What a whole model costs right now across all its variants — `min`, `median`,
+`max` and the five cheapest — instead of one specific board partner card.
+Sibling models (`4070 Ti`, `4070 Super`) are kept out.
+
+**`match_geizhals(title, ...)`**
+
+Resolve a free-form listing title ("Gigabyte RTX 5070 Windforce OC 12GB NEU OVP
+mit Rechnung") to Geizhals products, each with a 0–1 `confidence` and its live
+price.
 
 **`list_categories(query)`**
 
@@ -135,7 +157,9 @@ Geizhals rotates the secret or changes the fingerprint scheme.
 and rejects anything else outright. The two that bite: `pagesize` must be one
 of 1/5/10/30/100/300/1000, and `price_history`'s `days` must be 31/91/183/365.
 The tools snap `rows` and `days` to allowed values, so a 400 usually means
-another param drifted; the response body names the offending field.
+another param drifted; the response body names the offending field. Tools
+surface it as `{"error": "..."}` rather than raising the raw HTTP error, so the
+model sees what went wrong instead of an internal URL.
 
 ## Disclaimer
 
