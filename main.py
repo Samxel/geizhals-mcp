@@ -1,5 +1,4 @@
 from mcp.server import MCPServer
-from mcp.server.mcpserver import Image
 import httpx
 import asyncio
 import json
@@ -381,8 +380,8 @@ def _summarize_product(p: dict, site: str = "geizhals.at") -> dict:
         "rating_count": p.get("rating_count"),
         # bestprices is the observed range over the product's whole listed
         # history, not the price on offer today.
-        "alltime_price_min": bp.get("min"),
-        "alltime_price_max": bp.get("max"),
+        "alltime_price_min": _to_float(bp.get("min")),
+        "alltime_price_max": _to_float(bp.get("max")),
         "alltime_first_date": _iso_date(bp.get("first")),
         "alltime_last_date": _iso_date(bp.get("last")),
         "images": _image_urls(p.get("images")),
@@ -466,6 +465,9 @@ def _summarize_compare(p: dict, price_map: dict) -> dict:
 
     rating = p.get("rating") or {}
     share = p.get("share_url")
+    # No price and no offers is a real state (discontinued or temporarily
+    # unlisted), not missing data -- say so rather than leaving a bare null.
+    available = bool(best_price is not None and (offers or 0) > 0)
     return {
         "id": p.get("id"),
         "name": p.get("name"),
@@ -474,9 +476,8 @@ def _summarize_compare(p: dict, price_map: dict) -> dict:
         "best_price": best_price,
         "currency": pricing.get("loc_currency"),
         "offers": offers,
-        # No price and no offers is a real state (discontinued or temporarily
-        # unlisted), not missing data -- say so rather than leaving a bare null.
-        "available": bool(best_price is not None and (offers or 0) > 0),
+        "available": available,
+        "status": "available" if available else "unavailable",
         "rating_percent": rating.get("rate_perc"),
         "rating_stars": _to_float(rating.get("rate_val")),
         "rating_count": rating.get("count"),
@@ -916,10 +917,7 @@ async def compare_products(product_ids: list[Union[int, str]], *, loc: Country =
     unavailable = [p for p in compared if not p["available"] and p.get("id")]
     for product, last in zip(unavailable, await asyncio.gather(
             *(_last_known_price(p["id"], loc) for p in unavailable))):
-        product["status"] = "unavailable"
         product.update(last)
-    for product in compared:
-        product.setdefault("status", "available" if product["available"] else "unavailable")
     return {"products": compared}
 
 
@@ -1058,9 +1056,9 @@ def _match_score(query: set, name: str) -> float:
     # A word the query does not account for is weak evidence against a match --
     # product names are simply longer than ad titles. Half-weight it, so a short
     # name does not out-rank a better match that merely spells more out.
-    extra = (len(head) - matched_head) * 0.5
-    score = (len(covered) / len(query)
-             * (0.75 + 0.25 * matched_head / (matched_head + extra or 1)))
+    unexplained = (len(head) - matched_head) * 0.5
+    specificity = matched_head / (matched_head + unexplained) if matched_head else 0.0
+    score = len(covered) / len(query) * (0.75 + 0.25 * specificity)
     numbers = {t for t in query if t.isdigit()}
     if numbers and not numbers <= candidate:
         score *= 0.4
@@ -1100,7 +1098,7 @@ async def _detect_category(model: str, wanted: set, *, loc: str, hloc) -> Option
     borrowing a model's name to sell an accessory is cheaper than the model.
     """
     data = await _search_products(model, loc=loc, hloc=hloc, lang="en", sort="", rows=30)
-    hits = [_summarize_search_hit(p) for p in (data.get("products") or [])]
+    hits = [_summarize_search_hit(p, _site(loc)) for p in (data.get("products") or [])]
     scored = [(_match_score(wanted, h["name"] or ""), h)
               for h in _model_variants(hits, wanted) if h["category_code"]]
     if not scored:
@@ -1198,19 +1196,16 @@ async def get_model_price_range(
     }
     notes = []
     if detected:
-        notes.append(f"Category was not given and was detected as '{detected}'"
-                     f"{' (' + ' / '.join(result['category']) + ')' if result['category'] else ''}"
-                     f" -- if that is the wrong category, pass the right code as 'category'.")
+        notes.append("category_code was detected, not given -- check it fits.")
     elif category is None:
         notes.append("No category could be detected, so these numbers may mix the model with "
                      "accessories and prebuilt systems that borrow its name. Pass 'category'.")
     if not variants and hits:
-        notes.append(f"No variant of exactly '{model}' is on sale -- the hits were all sibling "
-                     f"models (e.g. {hits[0]['name']}). The model is most likely discontinued; "
-                     f"search_geizhals shows its all-time range and get_price_history its last price.")
+        notes.append(f"Nothing listed is exactly '{model}' -- every hit was a sibling model, so it "
+                     f"is most likely discontinued. search_geizhals gives its all-time range.")
     elif variants and not prices:
-        notes.append(f"All {len(variants)} listed variants are out of stock; use get_product "
-                     f"or get_price_history on one for its last known price.")
+        notes.append(f"All {len(variants)} variants are out of stock; get_product on one gives its "
+                     f"last known price.")
     if notes:
         result["note"] = " ".join(notes)
     return result
@@ -1278,12 +1273,9 @@ async def match_geizhals(
         result["note"] = (f"No dependable match -- the best is only {candidates[0]['confidence']}. "
                           f"Treat these as guesses rather than as the product.")
     elif len(candidates) > 1 and candidates[0]["confidence"] - candidates[1]["confidence"] < 0.05:
-        result["note"] = (f"Top candidates are within "
-                          f"{round(candidates[0]['confidence'] - candidates[1]['confidence'], 3)} of "
-                          f"each other, so the title does not tell them apart: "
-                          f"'{candidates[0]['name']}' vs '{candidates[1]['name']}'. Their prices can "
-                          f"differ a lot -- confirm the exact model from the ad's photos or specs "
-                          f"before using one as the reference.")
+        result["note"] = ("The top candidates score within 0.05 of each other, so the title does "
+                          "not tell them apart and their prices can differ a lot. Confirm the exact "
+                          "model from the ad's photos or specs before using one as the reference.")
     return result
 
 
