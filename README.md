@@ -38,6 +38,10 @@ follow-up call. Hits with no live offers add `alltime_price_min` /
 priceable without a call per hit. Also returns facet aggregates (categories,
 manufacturers) to refine with.
 
+Note that `sort="p"` narrows the result set as well as ordering it — Geizhals
+cannot price-order a product that has no price, so unavailable products leave
+both `results` and `total`.
+
 **`get_product(product_id)`**
 
 Full detail of one product: current best price and offer count, name, category,
@@ -78,13 +82,18 @@ target number of matches, not a fetch size.
 
 What a whole model costs right now across all its variants — `min`, `median`,
 `max` and the five cheapest — instead of one specific board partner card.
-Sibling models (`4070 Ti`, `4070 Super`) are kept out.
+Sibling models (`4070 Ti`, `4070 Super`) are kept out, and the result is always
+scoped to one category: an unscoped search for a pricey product is dominated by
+cases and water blocks below it and prebuilt systems above it, so the category
+is detected when you don't pass one and reported back as `category_code`.
 
 **`match_geizhals(title, ...)`**
 
 Resolve a free-form listing title ("Gigabyte RTX 5070 Windforce OC 12GB NEU OVP
 mit Rechnung") to Geizhals products, each with a 0–1 `confidence` and its live
-price.
+price. When the top candidates are too close to separate, or nothing scores
+convincingly, a `note` says so rather than letting a coin-flip look like an
+answer.
 
 **`list_categories(query)`**
 

@@ -100,6 +100,13 @@ feedback) tied to a user account.
   product gets empty values for properties that belong to the others.
 - `price_history` answers `400` for products with no tracked history at all
   (uncategorised marketplace listings), which looks the same as a bad `days`.
+- `sort: "p"` is a filter as well as an order: products with no live price
+  cannot be price-ordered and drop out of `products` **and** `total` (289 hits
+  become 146). The other sort keys leave the population alone.
+- `variant_id` identifies a product *family*, not a product — every sibling
+  variant shares one, and `variant_count` says how many there are.
+- `category_suggestions` comes back empty in practice, even with
+  `category_suggestions=1` and `category_suggestions_details=1`.
 
 ## Categories
 
