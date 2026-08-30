@@ -229,6 +229,22 @@ def _walk_categories(nodes, trail, trail_de, out):
         _walk_categories(nd.get("childs", []), path, path_de, out)
 
 
+def _category_paths() -> dict[str, list[str]]:
+    """code -> label path, so a category listing can name its category the same
+    way a search hit does instead of only echoing the code back."""
+    flat: list = []
+    _walk_categories(_CATEGORIES, [], [], flat)
+    paths: dict[str, list[str]] = {}
+    for node, path, _ in flat:
+        code = _cat_code(node)
+        if code:
+            paths.setdefault(code, path.split(" / "))
+    return paths
+
+
+_CATEGORY_PATH = _category_paths()
+
+
 # ---------------------------------------------------------------------------
 # Summaries
 # ---------------------------------------------------------------------------
@@ -289,13 +305,23 @@ def _best_shop(p: dict) -> Optional[str]:
     return None
 
 
+def _currency(p: dict) -> Optional[str]:
+    for offer in p.get("offers") or []:
+        currency = ((offer or {}).get("pricing") or {}).get("loc_currency")
+        if currency:
+            return currency
+    return None
+
+
 def _summarize_search_hit(p: dict, site: str = "geizhals.at") -> dict:
     urls = p.get("urls") or {}
     prices = p.get("prices") or {}
     best_price = _to_float(prices.get("best"))
     offer_count = p.get("offer_count")
-    return {
+    available = bool(best_price is not None and (offer_count or 0) > 0)
+    hit = {
         "id": p.get("gzhid"),
+        "variant_id": p.get("variant_id"),
         "name": _clean_html(p.get("product") or p.get("product_for_sort")),
         "manufacturer": p.get("manufacturer_name"),
         # uncategorised hits (Amazon passthrough listings) carry category: null
@@ -303,13 +329,30 @@ def _summarize_search_hit(p: dict, site: str = "geizhals.at") -> dict:
         "category_code": _leaf_cat(p.get("category")),
         "best_price": best_price,
         "avg_price": _to_float(prices.get("avg")),
+        "currency": _currency(p),
         "offer_count": offer_count,
-        "available": bool(best_price is not None and (offer_count or 0) > 0),
+        "available": available,
+        "status": "available" if available else "unavailable",
         "shop": _best_shop(p),
+        "rating_stars": p.get("rating_stars"),
+        "rating_percent": p.get("rating_percent"),
+        "rating_count": p.get("rating_count"),
         "image": (_image_urls(p.get("images")) or [None])[0],
         "url": f"https://{site}{urls.get('overview')}" if urls.get("overview") else None,
+        "mpn": p.get("mpn"),
         "listed_since": p.get("listed_since"),
     }
+    # A product with no live offers would otherwise be nothing but nulls. The
+    # all-time extrema come with the search response, so give the EOL anchor
+    # here rather than making the caller fetch each hit individually.
+    bp = p.get("bestprices") or {}
+    if not available and bp:
+        hit.update({
+            "alltime_price_min": _to_float(bp.get("min")),
+            "alltime_price_max": _to_float(bp.get("max")),
+            "alltime_last_date": _iso_date(bp.get("last")),
+        })
+    return hit
 
 
 def _summarize_product(p: dict, site: str = "geizhals.at") -> dict:
@@ -372,23 +415,30 @@ def _summarize_deal(d: dict) -> dict:
     }
 
 
-def _summarize_category_hit(p: dict) -> dict:
-    """Normalize a categorylist product into the same shape the other tools
-    return (categorylist ships raw, inconsistent fields otherwise)."""
+def _summarize_category_hit(p: dict, category: Optional[str] = None) -> dict:
+    """Normalize a categorylist product into the same shape ``search_geizhals``
+    returns (categorylist ships raw, inconsistent fields otherwise), so code
+    that reads either source sees the same keys."""
     pricing = p.get("pricing") or {}
     best_price = _to_float(p.get("best_price"))
     offer_count = p.get("offer_count")
+    available = bool(best_price is not None and (offer_count or 0) > 0)
     return {
         "id": p.get("id"),
+        "variant_id": p.get("variant_id"),
         "name": _clean_html(p.get("product_for_sort") or p.get("product")),
+        # every hit of a category listing is in that category by definition
+        "category": _CATEGORY_PATH.get(category or ""),
+        "category_code": category,
         "best_price": best_price,
         "currency": pricing.get("loc_currency"),
         "offer_count": offer_count,
-        "available": bool(best_price is not None and (offer_count or 0) > 0),
+        "available": available,
+        "status": "available" if available else "unavailable",
+        "shop": p.get("best_merch_name"),
         "rating_stars": p.get("rating_stars"),
         "rating_percent": p.get("rating_percent"),
         "rating_count": p.get("rating_count"),
-        "shop": p.get("best_merch_name"),
         "image": p.get("image_n") or p.get("image_m") or p.get("image_thumb"),
         "url": p.get("product_link"),
         "mpn": p.get("mpn"),
@@ -401,7 +451,11 @@ def _summarize_compare(p: dict, price_map: dict) -> dict:
     compare endpoint left it empty (it is not reliable for every id)."""
     labels = p.get("properties") or []
     values = p.get("propvalues") or []
-    specs = {label: _clean_html(value) for label, value in zip(labels, values)}
+    # The endpoint unions the property list across all compared products, so a
+    # printhead ends up with an empty "Förderhöhe" from the pump next to it.
+    # An empty string reads as "unknown", not "does not apply" -- drop those.
+    specs = {label: cleaned for label, value in zip(labels, values)
+             if (cleaned := _clean_html(value)) not in (None, "", [], {})}
 
     pricing = p.get("pricing") or {}
     fallback = price_map.get(str(p.get("id")), {})
@@ -438,8 +492,10 @@ async def _search_products(query: str, *, loc: str, hloc, lang: str, category=No
     """Raw product search (shared by the search tool and the model/match tools)."""
     payload = {
         "query": query,
+        # bestprice_extrema=1 costs nothing extra and is what lets a hit with no
+        # live offers still report its all-time range (see _summarize_search_hit)
         "params": _params(loc, hloc, lang=lang, offset=offset, pagesize=_page_size(rows), n_offers=1,
-                          bestprice_extrema=0, add_popularity=False,
+                          bestprice_extrema=1, add_popularity=False,
                           filter_category=category or "", filter_manufacturer=manufacturer or 0,
                           add_ratings=1, show_parent_category=1, category_suggestions=1,
                           sort=sort, category_suggestions_details=1, add_asin=1,
@@ -470,19 +526,25 @@ async def search_geizhals(
     here unless you already have a product id or category code.
 
     Returns ``{total, results: [...], facets}``. Each hit already carries its
-    current ``best_price``, ``offer_count``, cheapest ``shop`` and an
-    ``available`` flag, so a plain "what does X cost" needs no follow-up call;
-    go to ``get_product`` for ratings, images and the all-time price range, to
-    ``get_price_history`` for the trend, and to ``compare_products`` for specs.
-    A hit with ``available: false`` has no live offers (discontinued or
-    temporarily unlisted) -- ``get_price_history`` still gives its last known
-    price.
+    current ``best_price``, ``avg_price``, ``offer_count``, cheapest ``shop``,
+    ``currency``, ``rating_stars`` / ``rating_count`` and an ``available`` flag,
+    so a plain "what does X cost / how is it rated" needs no follow-up call. Go
+    to ``get_product`` only for images and the all-time range of a *listed*
+    product, to ``get_price_history`` for the trend, and to
+    ``compare_products`` for specs.
+
+    A hit with ``status: "unavailable"`` has no live offers (discontinued or
+    temporarily unlisted); those additionally carry ``alltime_price_min`` /
+    ``alltime_price_max`` / ``alltime_last_date``, so a list of old hardware is
+    still priceable without a call per hit. ``get_product`` adds the exact
+    ``last_known_price`` when you need it for one of them.
 
     ``facets`` lists the categories and manufacturers present in the full
     result set with counts -- use these to decide values for ``category`` /
     ``manufacturer`` on a follow-up, narrower call rather than guessing ids.
-    ``facets.price_range`` comes from Geizhals' own filter widget and its
-    ``min`` is usually 0; take the hits' ``best_price`` as the real range.
+    ``facets.price_range.min`` is null because Geizhals reports the facet floor
+    as 0 whatever the hits cost; for a real range use the hits' ``best_price``
+    or ``browse_category``, whose ``price_range`` is genuine.
 
     Args:
         query: Free-text search term.
@@ -501,12 +563,18 @@ async def search_geizhals(
         rows: Max results to return (page size). Default 10.
         offset: Paging offset into the result set. Default 0.
     """
+    if rows < 1:
+        raise ValueError(f"rows must be at least 1 (got {rows}).")
     data = await _search_products(query, loc=loc, hloc=hloc, lang=lang, category=category,
                                   manufacturer=manufacturer, sort=sort, rows=rows, offset=offset)
     # every list below can come back as an explicit null (no hits, uncategorised
     # hits, no facets), so `or []` rather than a dict default
     facets = data.get("facet_aggregates") or {}
     site = _site(loc)
+    # Geizhals reports the facet's price floor as 0 whatever the hits cost, so
+    # null it rather than pass off a meaningless number as the cheapest hit.
+    price_range = facets.get("price_range") or {}
+    price_range = {"min": price_range.get("min") or None, "max": price_range.get("max") or None}
     return {
         "total": data.get("total"),
         "results": [_summarize_search_hit(p, site) for p in (data.get("products") or [])[:rows]],
@@ -515,7 +583,7 @@ async def search_geizhals(
                            for c in (facets.get("categories") or [])],
             "manufacturers": [{"id": m.get("id"), "name": m.get("name"), "count": m.get("count")}
                               for m in (facets.get("manufacturer") or [])],
-            "price_range": facets.get("price_range"),
+            "price_range": price_range,
         },
     }
 
@@ -630,7 +698,14 @@ async def get_price_history(product_id: Union[int, str], *, days: int = 31,
     """
     window = min(HISTORY_WINDOWS, key=lambda w: abs(w - days))
     payload = {"id": int(product_id), "params": {"days": window, "loc": loc, "hloc": []}}
-    data = await _post("price_history", payload)
+    try:
+        data = await _post("price_history", payload)
+    except UpstreamError as exc:
+        raise UpstreamError(
+            f"{exc} Product {product_id} most likely has no Geizhals price history -- "
+            f"uncategorised marketplace listings (a single shop's feed, no category_code "
+            f"on the search hit) are not price-tracked."
+        ) from exc
     meta = data.get("meta") or {}
     points = [[_iso_date(p[0]), _to_float(p[1])] for p in (data.get("response") or [])
               if isinstance(p, list) and len(p) >= 2 and p[1] is not None]
@@ -720,6 +795,13 @@ async def browse_category(category: str, *, loc: Country = "at",
     Use ``list_categories`` first to resolve the name to a code (e.g. "gra16"
     for graphics cards); don't guess codes.
 
+    Hits have the same shape as ``search_geizhals`` results (``best_price``,
+    ``offer_count``, ``currency``, ``available`` / ``status``, ``shop``,
+    ``rating_*``, ``mpn``, ``category``), so code can read either source; only
+    ``avg_price``, ``manufacturer`` and ``listed_since`` are missing, because
+    the category feed does not carry them. Unlike the search facet, the
+    ``price_range`` returned here is the category's real one.
+
     Args:
         category: The category code from ``list_categories`` or a search hit's
             ``category_code`` / ``facets.categories``.
@@ -732,6 +814,8 @@ async def browse_category(category: str, *, loc: Country = "at",
         rows: Max results to return (page size). Default 20.
         offset: Paging offset into the result set. Default 0.
     """
+    if rows < 1:
+        raise ValueError(f"rows must be at least 1 (got {rows}).")
     if price_min is not None and price_max is not None and price_min > price_max:
         raise ValueError(f"price_min ({price_min}) is above price_max ({price_max}); swap them.")
     params = _params(loc, hloc, lang=lang, offset=offset, pagesize=_page_size(rows), sort=sort,
@@ -751,7 +835,9 @@ async def browse_category(category: str, *, loc: Country = "at",
     return {
         "category": category,
         "total": data.get("total"),
-        "results": [_summarize_category_hit(p) for p in products[:rows] if isinstance(p, dict)],
+        # unlike the search facet, this one is real
+        "price_range": data.get("price_range"),
+        "results": [_summarize_category_hit(p, category) for p in products[:rows] if isinstance(p, dict)],
     }
 
 
@@ -763,7 +849,10 @@ async def compare_products(product_ids: list[Union[int, str]], *, loc: Country =
     between a shortlist of alternatives. Returns ``{products: [...]}`` where
     each product has its name, manufacturer, best price, rating and a
     ``specs`` map (property -> value) with the HTML Geizhals embeds stripped
-    out and dates normalized to ISO.
+    out and dates normalized to ISO. Geizhals unions the property list across
+    everything being compared, so properties that do not apply to a product
+    (a pump's "Förderhöhe" on a printhead) are dropped from its ``specs``
+    rather than left as an empty string that reads like missing data.
 
     Pricing missing from the comparison response is backfilled from
     ``products_details``. ``available`` is false when a product genuinely has
