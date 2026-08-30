@@ -31,9 +31,12 @@ important fields to the AI.
 
 Search products by keyword. Filters for country (`loc`/`hloc`), category and
 manufacturer, plus sorting and paging. Every hit carries its current
-`best_price`, `offer_count`, cheapest `shop` and an `available` flag, so a plain
-price question needs no follow-up call. Also returns facet aggregates
-(categories, manufacturers) to refine with.
+`best_price`, `avg_price`, `offer_count`, `currency`, cheapest `shop`,
+`rating_*` and an `available` flag, so a plain price-or-rating question needs no
+follow-up call. Hits with no live offers add `alltime_price_min` /
+`alltime_price_max` / `alltime_last_date`, so a list of discontinued hardware is
+priceable without a call per hit. Also returns facet aggregates (categories,
+manufacturers) to refine with.
 
 **`get_product(product_id)`**
 
@@ -54,12 +57,15 @@ Average rating, totals, per-star counts and the reviews link.
 
 **`browse_category(category, ...)`**
 
-List the products in a category by its code, with price range and sorting.
+List the products in a category by its code, with price bounds and sorting.
+Hits use the same field names as `search_geizhals`, and the `price_range`
+returned alongside them is the category's real one (the search facet's is not).
 
 **`compare_products(product_ids)`**
 
-Compare several products side by side, specs included. Discontinued products
-carry their last known price.
+Compare several products side by side, specs included — properties that don't
+apply to a product are dropped rather than shown as empty. Discontinued
+products carry their last known price.
 
 **`get_deals(sort="percent", ...)`**
 
