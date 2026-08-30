@@ -539,6 +539,11 @@ async def search_geizhals(
     still priceable without a call per hit. ``get_product`` adds the exact
     ``last_known_price`` when you need it for one of them.
 
+    ``id`` is the product; ``variant_id`` is **not** -- it is shared by every
+    sibling variant of the same family (the Twin Edge, Twin Edge OC and Twin
+    Edge OC White Edition of one card all carry the same one), so use it to
+    group siblings, never to deduplicate products.
+
     ``facets`` lists the categories and manufacturers present in the full
     result set with counts -- use these to decide values for ``category`` /
     ``manufacturer`` on a follow-up, narrower call rather than guessing ids.
@@ -559,7 +564,13 @@ async def search_geizhals(
         manufacturer: Restrict to a manufacturer id from a prior call's
             ``facets.manufacturers``.
         sort: "" (relevance, default), "p" (price), "n" (newest) or "r"
-            (rating).
+            (rating). Note that "p" also *narrows* the result set: Geizhals
+            cannot price-order a product that has no price, so products with no
+            live offers drop out of both ``results`` and ``total`` (a query with
+            289 hits returns 145 under "p"). Use it when you only want things
+            you can actually buy, and the default when you want the whole
+            population -- ``total`` is only comparable across calls that sort
+            the same way.
         rows: Max results to return (page size). Default 10.
         offset: Paging offset into the result set. Default 0.
     """
@@ -621,6 +632,8 @@ async def get_product(product_id: Union[int, str], *, loc: Country = "at",
 
     ``status`` is "available" or "unavailable"; the ``alltime_*`` fields are the
     range observed over the product's whole listed history, not today's price.
+    ``variant_count`` is how many sibling variants share this product's
+    ``variant_id`` (that id identifies the family, not this product).
     When a product has no live offers (discontinued or temporarily unlisted)
     this adds ``last_known_price`` / ``last_known_date`` /
     ``days_since_last_price`` from the price history, so an EOL product is still
@@ -1041,7 +1054,13 @@ def _match_score(query: set, name: str) -> float:
     # Geizhals appends the specs after the first comma ("..., 12GB GDDR7, HDMI");
     # score how specific the match is against the name proper, not that tail.
     head = set(_title_tokens((name or "").split(",")[0])) or candidate
-    score = len(covered) / len(query) * (0.75 + 0.25 * len(query & head) / len(head))
+    matched_head = len(query & head)
+    # A word the query does not account for is weak evidence against a match --
+    # product names are simply longer than ad titles. Half-weight it, so a short
+    # name does not out-rank a better match that merely spells more out.
+    extra = (len(head) - matched_head) * 0.5
+    score = (len(covered) / len(query)
+             * (0.75 + 0.25 * matched_head / (matched_head + extra or 1)))
     numbers = {t for t in query if t.isdigit()}
     if numbers and not numbers <= candidate:
         score *= 0.4
@@ -1058,6 +1077,47 @@ def _median(values: list[float]) -> Optional[float]:
     return ordered[mid] if len(ordered) % 2 else round((ordered[mid - 1] + ordered[mid]) / 2, 2)
 
 
+def _model_variants(hits: list[dict], wanted: set) -> list[dict]:
+    """Hits that really are the wanted model: every model word present, and no
+    variant marker the model itself does not carry -- "RTX 4070" must not be
+    priced off a 4070 Ti or a 4070 Super."""
+    out = []
+    for hit in hits:
+        tokens = set(_title_tokens(hit.get("name") or ""))
+        if wanted <= tokens and not (_VARIANT_TOKENS & tokens) - wanted:
+            out.append(hit)
+    return out
+
+
+async def _detect_category(model: str, wanted: set, *, loc: str, hloc) -> Optional[str]:
+    """Guess which category a model name belongs to.
+
+    An unscoped search for an expensive product is dominated by things that are
+    not it: cases and water blocks below it, prebuilt systems and notebooks
+    above. Both are excluded here -- containing products carry many words the
+    model name does not explain and lose on match score, and of the categories
+    that survive that cut the product's own is the dearest, because anything
+    borrowing a model's name to sell an accessory is cheaper than the model.
+    """
+    data = await _search_products(model, loc=loc, hloc=hloc, lang="en", sort="", rows=30)
+    hits = [_summarize_search_hit(p) for p in (data.get("products") or [])]
+    scored = [(_match_score(wanted, h["name"] or ""), h)
+              for h in _model_variants(hits, wanted) if h["category_code"]]
+    if not scored:
+        return None
+    cutoff = max(score for score, _ in scored) - 0.03
+    by_category: dict = {}
+    for score, hit in scored:
+        if score >= cutoff:
+            by_category.setdefault(hit["category_code"], []).append(hit)
+
+    def rank(entry):
+        prices = [h["best_price"] for h in entry[1] if h["best_price"]]
+        return (_median(prices) or 0, len(entry[1]))
+
+    return max(by_category.items(), key=rank)[0]
+
+
 @mcp.tool()
 @_tool_errors
 async def get_model_price_range(
@@ -1066,7 +1126,7 @@ async def get_model_price_range(
     category: Optional[str] = None,
     loc: Country = "at",
     hloc: Optional[list[Country]] = None,
-    max_variants: int = 60,
+    max_variants: int = 100,
 ) -> dict:
     """What a *model* costs right now across all its board partner / vendor
     variants -- "what does an RTX 5070 go for", not "what does the Zotac Twin
@@ -1074,45 +1134,58 @@ async def get_model_price_range(
     against the new market; doing it by hand would mean a search, picking the
     variants out yourself and a ``compare_products`` call.
 
-    Returns ``{min, median, max, variants, available, cheapest: [...]}`` over
-    every listed variant whose name contains all of the ``model`` words. ``min``
-    is the cheapest live offer for the model, ``variants`` how many variants
-    matched and ``available`` how many of those are actually on sale.
-    ``cheapest`` lists the five cheapest with their ids, so you can go straight
-    into ``get_product`` / ``get_price_history`` from here.
+    Returns ``{min, median, max, variants, cheapest: [...]}`` over every listed
+    variant whose name contains all of the ``model`` words. ``min`` is the
+    cheapest live offer for the model and ``cheapest`` lists the five cheapest
+    with their ids, so you can go straight into ``get_product`` /
+    ``get_price_history`` from here. ``considered`` is how many search hits were
+    examined and ``total_hits`` how many the query has in total; when
+    ``considered`` reaches ``max_variants`` the ``max`` and ``median`` describe
+    the cheapest ``max_variants`` only.
+
+    The result is always scoped to one category, because an unscoped search for
+    a pricey product is dominated by things that are not it -- cases, water
+    blocks and mounts below it, prebuilt systems and notebooks above -- and
+    averaging those in would understate the model by an order of magnitude.
+    Pass ``category`` when you know it; otherwise it is detected from the search
+    and reported back as ``category_code`` with a ``note``, so check that field
+    before trusting the numbers.
 
     Args:
         model: The model as people write it, e.g. "RTX 5070", "iPhone 15 Pro"
             or "Ryzen 7 7800X3D". All words must appear in a variant's name, so
             keep it to the model itself and leave vendor/edition words out.
-        category: Optional category code to scope to (from ``list_categories``
-            or a search hit's ``category_code``) -- worth passing when the model
-            name also appears in other categories, e.g. graphics cards showing
-            up inside prebuilt systems.
+        category: Category code to scope to (from ``list_categories`` or a
+            search hit's ``category_code``). Omit to have it detected; passing
+            it explicitly is one request cheaper and removes the guess.
         loc: Country site for pricing: "at", "de", "eu", "uk", "pl" or "sk".
         hloc: Which shop countries' offers to include; defaults to ``[loc]``.
-        max_variants: How many hits to consider, cheapest first. Default 60,
-            max 100 -- with more listed variants than that the ``max`` and
-            ``median`` describe the cheapest ``max_variants`` only.
+        max_variants: How many search hits to consider, most relevant first.
+            Default 100, which is also the maximum.
     """
     max_variants = max(1, min(int(max_variants), 100))
-    data = await _search_products(model, loc=loc, hloc=hloc, lang="en", category=category,
-                                  sort="p", rows=max_variants)
     site = _site(loc)
     wanted = set(_title_tokens(model))
+    if not wanted:
+        return {"error": f"nothing searchable in the model name {model!r}"}
+
+    detected = None
+    if category is None:
+        category = detected = await _detect_category(model, wanted, loc=loc, hloc=hloc)
+
+    # Relevance, not price: sorting by price would show the cheapest hits of a
+    # fuzzy query, and for a pricey model those are all the *other* models --
+    # an "iPhone 16 Pro" price sort is 60 cheaper iPhones and no 16 Pro at all.
+    data = await _search_products(model, loc=loc, hloc=hloc, lang="en", category=category,
+                                  sort="", rows=max_variants)
     hits = [_summarize_search_hit(p, site) for p in (data.get("products") or [])[:max_variants]]
-    # The free-text search is fuzzy, so keep only variants that really carry the
-    # model -- and drop the siblings a model name subsumes: "RTX 4070" must not
-    # be priced off a 4070 Ti or a 4070 Super.
-    variants = []
-    for hit in hits:
-        tokens = set(_title_tokens(hit["name"] or ""))
-        if wanted <= tokens and not (_VARIANT_TOKENS & tokens) - wanted:
-            variants.append(hit)
+    variants = _model_variants(hits, wanted)
     prices = [h["best_price"] for h in variants if h["available"] and h["best_price"] is not None]
     cheapest = sorted((h for h in variants if h["available"]), key=lambda h: h["best_price"])
     result = {
         "model": model,
+        "category_code": category,
+        "category": _CATEGORY_PATH.get(category or ""),
         "min": min(prices) if prices else None,
         "median": _median(prices),
         "max": max(prices) if prices else None,
@@ -1123,13 +1196,23 @@ async def get_model_price_range(
         "cheapest": [{"id": h["id"], "name": h["name"], "best_price": h["best_price"],
                       "offer_count": h["offer_count"], "shop": h["shop"]} for h in cheapest[:5]],
     }
+    notes = []
+    if detected:
+        notes.append(f"Category was not given and was detected as '{detected}'"
+                     f"{' (' + ' / '.join(result['category']) + ')' if result['category'] else ''}"
+                     f" -- if that is the wrong category, pass the right code as 'category'.")
+    elif category is None:
+        notes.append("No category could be detected, so these numbers may mix the model with "
+                     "accessories and prebuilt systems that borrow its name. Pass 'category'.")
     if not variants and hits:
-        result["note"] = (f"No variant of exactly '{model}' is listed -- the hits were all "
-                          f"sibling models (e.g. {hits[0]['name']}). The model is most likely "
-                          f"discontinued; get_price_history on one of them gives its last price.")
+        notes.append(f"No variant of exactly '{model}' is on sale -- the hits were all sibling "
+                     f"models (e.g. {hits[0]['name']}). The model is most likely discontinued; "
+                     f"search_geizhals shows its all-time range and get_price_history its last price.")
     elif variants and not prices:
-        result["note"] = (f"All {len(variants)} listed variants are out of stock; use get_product "
-                          f"or get_price_history on one for its last known price.")
+        notes.append(f"All {len(variants)} listed variants are out of stock; use get_product "
+                     f"or get_price_history on one for its last known price.")
+    if notes:
+        result["note"] = " ".join(notes)
     return result
 
 
@@ -1188,7 +1271,20 @@ async def match_geizhals(
         if score:
             candidates.append({"confidence": score, **hit})
     candidates.sort(key=lambda c: (-c["confidence"], c["best_price"] is None))
-    return {"query": query, "count": len(candidates), "candidates": candidates[:limit]}
+    result = {"query": query, "count": len(candidates), "candidates": candidates[:limit]}
+    if not candidates:
+        result["note"] = ("Nothing matched. Try a shorter title, or scope it with 'category'.")
+    elif candidates[0]["confidence"] < 0.5:
+        result["note"] = (f"No dependable match -- the best is only {candidates[0]['confidence']}. "
+                          f"Treat these as guesses rather than as the product.")
+    elif len(candidates) > 1 and candidates[0]["confidence"] - candidates[1]["confidence"] < 0.05:
+        result["note"] = (f"Top candidates are within "
+                          f"{round(candidates[0]['confidence'] - candidates[1]['confidence'], 3)} of "
+                          f"each other, so the title does not tell them apart: "
+                          f"'{candidates[0]['name']}' vs '{candidates[1]['name']}'. Their prices can "
+                          f"differ a lot -- confirm the exact model from the ad's photos or specs "
+                          f"before using one as the reference.")
+    return result
 
 
 @mcp.tool()
