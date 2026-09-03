@@ -11,6 +11,18 @@ important fields to the AI.
   <a href="https://geizhals.at/"><img alt="Merchants" src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FSamxel%2Fgeizhals-mcp%2Fmain%2Fcoverage.json&query=%24.merchants&label=merchants&color=1e6fff&suffix=%20shops&cacheSeconds=3600"></a>
 </p>
 
+<p align="center">
+  <a href="#highlights">Highlights</a> ·
+  <a href="#setup">Setup</a> ·
+  <a href="#run">Run</a> ·
+  <a href="#add-it-to-claude-and-other-mcp-clients">Add to Claude</a> ·
+  <a href="#tools">Tools</a> ·
+  <a href="#notes">Notes</a> ·
+  <a href="#troubleshooting">Troubleshooting</a> ·
+  <a href="#disclaimer">Disclaimer</a> ·
+  <a href="#license">License</a>
+</p>
+
 ## Highlights
 
 - **Best price across every shop**  
