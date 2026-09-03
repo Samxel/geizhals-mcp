@@ -25,82 +25,6 @@ important fields to the AI.
 - **Price a used listing**  
   `match_geizhals` turns a classifieds ad headline into the Geizhals products it could be (with a confidence score), and `get_model_price_range` gives the new-price range across every variant of a model — the two numbers a "is this second-hand offer a deal" answer needs.
 
-## Tools
-
-**`search_geizhals(query, ...)`**
-
-Search products by keyword. Filters for country (`loc`/`hloc`), category and
-manufacturer, plus sorting and paging. Every hit carries its current
-`best_price`, `avg_price`, `offer_count`, `currency`, cheapest `shop`,
-`rating_*` and an `available` flag, so a plain price-or-rating question needs no
-follow-up call. Hits with no live offers add `alltime_price_min` /
-`alltime_price_max` / `alltime_last_date`, so a list of discontinued hardware is
-priceable without a call per hit. Also returns facet aggregates (categories,
-manufacturers) to refine with.
-
-Note that `sort="p"` narrows the result set as well as ordering it — Geizhals
-cannot price-order a product that has no price, so unavailable products leave
-both `results` and `total`.
-
-**`get_product(product_id)`**
-
-Full detail of one product: current best price and offer count, name, category,
-rating, images, offer link, all-time price range and test-review count. A
-product with no live offers gets its `last_known_price` / `last_known_date`
-filled in instead of a bare `null`.
-
-**`get_price_history(product_id, days=31)`**
-
-Window (`window_min/max/avg/change_percent`) and all-time (`alltime_min/max`)
-summaries kept strictly apart, plus a `[iso_date, price]` series.
-`include_series=False` and `granularity="week"` keep long windows cheap.
-
-**`get_product_ratings(product_id)`**
-
-Average rating, totals, per-star counts and the reviews link.
-
-**`browse_category(category, ...)`**
-
-List the products in a category by its code, with price bounds and sorting.
-Hits use the same field names as `search_geizhals`, and the `price_range`
-returned alongside them is the category's real one (the search facet's is not).
-
-**`compare_products(product_ids)`**
-
-Compare several products side by side, specs included — properties that don't
-apply to a product are dropped rather than shown as empty. Discontinued
-products carry their last known price.
-
-**`get_deals(sort="percent", ...)`**
-
-Current price drops: products whose best price just fell, with the percent and
-amount off. Sort by biggest `percent` drop, `price`, `latest`, `popularity` or
-`top` deals, and filter with `min_discount_percent` / `max_price`. `limit` is a
-target number of matches, not a fetch size.
-
-**`get_model_price_range(model, ...)`**
-
-What a whole model costs right now across all its variants — `min`, `median`,
-`max` and the five cheapest — instead of one specific board partner card.
-Sibling models (`4070 Ti`, `4070 Super`) are kept out, and the result is always
-scoped to one category: an unscoped search for a pricey product is dominated by
-cases and water blocks below it and prebuilt systems above it, so the category
-is detected when you don't pass one and reported back as `category_code`.
-
-**`match_geizhals(title, ...)`**
-
-Resolve a free-form listing title ("Gigabyte RTX 5070 Windforce OC 12GB NEU OVP
-mit Rechnung") to Geizhals products, each with a 0–1 `confidence` and its live
-price. When the top candidates are too close to separate, or nothing scores
-convincingly, a `note` says so rather than letting a coin-flip look like an
-answer.
-
-**`list_categories(query)`**
-
-Browse Geizhals' category tree to find the category codes `browse_category`
-takes. Matches English or German names ("graphics cards" and "grafikkarten"
-both work). The full tree ships with the server in `data/categories.json`.
-
 ## Setup
 
 Requires Python 3.9+.
@@ -189,6 +113,83 @@ reachable by whoever finds the URL, so put auth in front of it.
 
 To stop confirming every call, open **Settings > Connectors > geizhals** and set
 the tools' dropdown on the right to **Always allow**.
+
+## Tools
+
+**`search_geizhals(query, ...)`**
+
+Search products by keyword. Filters for country (`loc`/`hloc`), category and
+manufacturer, plus sorting and paging. Every hit carries its current
+`best_price`, `avg_price`, `offer_count`, `currency`, cheapest `shop`,
+`rating_*` and an `available` flag, so a plain price-or-rating question needs no
+follow-up call. Hits with no live offers add `alltime_price_min` /
+`alltime_price_max` / `alltime_last_date`, so a list of discontinued hardware is
+priceable without a call per hit. Also returns facet aggregates (categories,
+manufacturers) to refine with.
+
+Note that `sort="p"` narrows the result set as well as ordering it — Geizhals
+cannot price-order a product that has no price, so unavailable products leave
+both `results` and `total`.
+
+**`get_product(product_id)`**
+
+Full detail of one product: current best price and offer count, name, category,
+rating, images, offer link, all-time price range and test-review count. A
+product with no live offers gets its `last_known_price` / `last_known_date`
+filled in instead of a bare `null`.
+
+**`get_price_history(product_id, days=31)`**
+
+Window (`window_min/max/avg/change_percent`) and all-time (`alltime_min/max`)
+summaries kept strictly apart, plus a `[iso_date, price]` series.
+`include_series=False` and `granularity="week"` keep long windows cheap.
+
+**`get_product_ratings(product_id)`**
+
+Average rating, totals, per-star counts and the reviews link.
+
+**`browse_category(category, ...)`**
+
+List the products in a category by its code, with price bounds and sorting.
+Hits use the same field names as `search_geizhals`, and the `price_range`
+returned alongside them is the category's real one (the search facet's is not).
+
+**`compare_products(product_ids)`**
+
+Compare several products side by side, specs included — properties that don't
+apply to a product are dropped rather than shown as empty. Discontinued
+products carry their last known price.
+
+**`get_deals(sort="percent", ...)`**
+
+Current price drops: products whose best price just fell, with the percent and
+amount off. Sort by biggest `percent` drop, `price`, `latest`, `popularity` or
+`top` deals, and filter with `min_discount_percent` / `max_price`. `limit` is a
+target number of matches, not a fetch size.
+
+**`get_model_price_range(model, ...)`**
+
+What a whole model costs right now across all its variants — `min`, `median`,
+`max` and the five cheapest — instead of one specific board partner card.
+Sibling models (`4070 Ti`, `4070 Super`) are kept out, and the result is always
+scoped to one category: an unscoped search for a pricey product is dominated by
+cases and water blocks below it and prebuilt systems above it, so the category
+is detected when you don't pass one and reported back as `category_code`.
+
+**`match_geizhals(title, ...)`**
+
+Resolve a free-form listing title ("Gigabyte RTX 5070 Windforce OC 12GB NEU OVP
+mit Rechnung") to Geizhals products, each with a 0–1 `confidence` and its live
+price. When the top candidates are too close to separate, or nothing scores
+convincingly, a `note` says so rather than letting a coin-flip look like an
+answer.
+
+**`list_categories(query)`**
+
+Browse Geizhals' category tree to find the category codes `browse_category`
+takes. Matches English or German names ("graphics cards" and "grafikkarten"
+both work). The full tree ships with the server in `data/categories.json`.
+
 ## Notes
 
 - `data/categories.json` is a snapshot of Geizhals' category tree (title,
