@@ -1,4 +1,5 @@
 from mcp.server import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 import httpx
 import asyncio
 import json
@@ -10,10 +11,9 @@ import base64
 import html
 import unicodedata
 import urllib.parse
-import functools
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional, Union, Literal
+from typing import Optional, Literal
 import logging
 
 BASE_URL = "https://api.geizhals.net/gh/v9"
@@ -102,21 +102,14 @@ def _auth_header(body_bytes: bytes, method: str = "POST", query_string: str = ""
     return f"Bearer {signing_input}.{signature_b64}"
 
 
-class UpstreamError(RuntimeError):
-    """An upstream Geizhals failure, already phrased for the caller. Tools turn
-    it into ``{"error": ...}`` instead of leaking the internal url."""
+class UpstreamError(ToolError):
+    """An upstream Geizhals failure, already phrased for the caller. As a
+    ``ToolError`` it reaches the model as an ``is_error`` result carrying this
+    text; any other exception would only say "Error executing tool"."""
 
-
-def _tool_errors(fn):
-    """Return upstream failures as ``{"error": ...}`` -- the shape ``get_product``
-    already used -- rather than raising a raw httpx error at the client."""
-    @functools.wraps(fn)
-    async def wrapper(*args, **kwargs):
-        try:
-            return await fn(*args, **kwargs)
-        except UpstreamError as exc:
-            return {"error": str(exc)}
-    return wrapper
+    def __init__(self, message: str, status: Optional[int] = None):
+        super().__init__(message)
+        self.status = status
 
 
 async def _post(endpoint: str, payload: dict) -> dict:
@@ -140,13 +133,21 @@ async def _post(endpoint: str, payload: dict) -> dict:
             if response.status_code == 403:
                 raise UpstreamError(
                     "Geizhals rejected the request signature (403) -- the app's "
-                    "signing credentials in main.py are most likely outdated."
+                    "signing credentials in main.py are most likely outdated.", 403
                 )
             if response.status_code not in RETRYABLE_STATUS or attempt == MAX_RETRIES:
+                if response.status_code >= 500:
+                    # still failing after the retries: their side, not the arguments
+                    raise UpstreamError(
+                        f"Geizhals could not answer the '{endpoint}' request (HTTP "
+                        f"{response.status_code}); this is on their side, not the arguments.",
+                        response.status_code
+                    )
                 if response.status_code >= 400:
                     raise UpstreamError(
                         f"Geizhals rejected the '{endpoint}' request (HTTP "
-                        f"{response.status_code}); check the arguments you passed."
+                        f"{response.status_code}); check the arguments you passed.",
+                        response.status_code
                     )
                 return response.json()
         delay = 0.5 * (2 ** attempt)
@@ -509,7 +510,6 @@ async def _search_products(query: str, *, loc: str, hloc, lang: str, category=No
 # Tools
 # ---------------------------------------------------------------------------
 @mcp.tool()
-@_tool_errors
 async def search_geizhals(
     query: str,
     *,
@@ -576,7 +576,7 @@ async def search_geizhals(
         offset: Paging offset into the result set. Default 0.
     """
     if rows < 1:
-        raise ValueError(f"rows must be at least 1 (got {rows}).")
+        raise ToolError(f"rows must be at least 1 (got {rows}).")
     data = await _search_products(query, loc=loc, hloc=hloc, lang=lang, category=category,
                                   manufacturer=manufacturer, sort=sort, rows=rows, offset=offset)
     # every list below can come back as an explicit null (no hits, uncategorised
@@ -600,14 +600,14 @@ async def search_geizhals(
     }
 
 
-async def _last_known_price(product_id: Union[int, str], loc: str) -> dict:
+async def _last_known_price(product_id: int, loc: str) -> dict:
     """Last recorded price of a product that has no live offers, so a
     discontinued product still gives an agent something to compare against
     instead of a bare null."""
     try:
-        data = await _post("price_history", {"id": int(product_id),
+        data = await _post("price_history", {"id": product_id,
                                              "params": {"days": 365, "loc": loc, "hloc": []}})
-    except (UpstreamError, ValueError, TypeError):
+    except UpstreamError:
         return {}
     for point in reversed(data.get("response") or []):
         if isinstance(point, list) and len(point) >= 2 and point[1] is not None:
@@ -621,8 +621,7 @@ async def _last_known_price(product_id: Union[int, str], loc: str) -> dict:
 
 
 @mcp.tool()
-@_tool_errors
-async def get_product(product_id: Union[int, str], *, loc: Country = "at",
+async def get_product(product_id: int, *, loc: Country = "at",
                       hloc: Optional[list[Country]] = None,
                       lang: Literal["en", "de"] = "en", n_offers: int = 20) -> dict:
     """Look up full detail for a single product you already have the Geizhals
@@ -659,7 +658,7 @@ async def get_product(product_id: Union[int, str], *, loc: Country = "at",
     }
     response = (await _post("query_product", payload)).get("response") or []
     if not response:
-        return {"error": f"no product for id {product_id}"}
+        raise ToolError(f"No product with id {product_id}.")
     product = _summarize_product(response[0], _site(loc))
     product["status"] = "available" if product["available"] else "unavailable"
     if not product["available"]:
@@ -676,8 +675,7 @@ def _weekly(points: list) -> list:
 
 
 @mcp.tool()
-@_tool_errors
-async def get_price_history(product_id: Union[int, str], *, days: int = 31,
+async def get_price_history(product_id: int, *, days: int = 31,
                             loc: Country = "at", include_series: bool = True,
                             granularity: Literal["day", "week"] = "day") -> dict:
     """Price history for a product, to answer "has this gotten cheaper / should
@@ -711,14 +709,16 @@ async def get_price_history(product_id: Union[int, str], *, days: int = 31,
             per ISO week, the week's last price).
     """
     window = min(HISTORY_WINDOWS, key=lambda w: abs(w - days))
-    payload = {"id": int(product_id), "params": {"days": window, "loc": loc, "hloc": []}}
+    payload = {"id": product_id, "params": {"days": window, "loc": loc, "hloc": []}}
     try:
         data = await _post("price_history", payload)
     except UpstreamError as exc:
+        if exc.status != 400:
+            raise
         raise UpstreamError(
             f"{exc} Product {product_id} most likely has no Geizhals price history -- "
             f"uncategorised marketplace listings (a single shop's feed, no category_code "
-            f"on the search hit) are not price-tracked."
+            f"on the search hit) are not price-tracked.", exc.status
         ) from exc
     meta = data.get("meta") or {}
     points = [[_iso_date(p[0]), _to_float(p[1])] for p in (data.get("response") or [])
@@ -756,8 +756,7 @@ async def get_price_history(product_id: Union[int, str], *, days: int = 31,
 
 
 @mcp.tool()
-@_tool_errors
-async def get_product_ratings(product_id: Union[int, str], *, rows: int = 10,
+async def get_product_ratings(product_id: int, *, rows: int = 10,
                               sort: Literal["latest", "helpful"] = "latest",
                               loc: Country = "at") -> dict:
     """Aggregate user ratings for a product: average rating, total count,
@@ -773,7 +772,7 @@ async def get_product_ratings(product_id: Union[int, str], *, rows: int = 10,
             "eu", "uk", "pl" or "sk". Default "at".
     """
     payload = {
-        "product_id": int(product_id), "filter_ghonly": 0, "offset": 0,
+        "product_id": product_id, "filter_ghonly": 0, "offset": 0,
         "pagesize": _page_size(rows), "sort": sort, "params": {"comments": True},
     }
     data = await _post("query_product_ratings", payload)
@@ -797,7 +796,6 @@ async def get_product_ratings(product_id: Union[int, str], *, rows: int = 10,
 
 
 @mcp.tool()
-@_tool_errors
 async def browse_category(category: str, *, loc: Country = "at",
                           hloc: Optional[list[Country]] = None,
                           lang: Literal["en", "de"] = "en", sort: Sort = "t",
@@ -829,9 +827,9 @@ async def browse_category(category: str, *, loc: Country = "at",
         offset: Paging offset into the result set. Default 0.
     """
     if rows < 1:
-        raise ValueError(f"rows must be at least 1 (got {rows}).")
+        raise ToolError(f"rows must be at least 1 (got {rows}).")
     if price_min is not None and price_max is not None and price_min > price_max:
-        raise ValueError(f"price_min ({price_min}) is above price_max ({price_max}); swap them.")
+        raise ToolError(f"price_min ({price_min}) is above price_max ({price_max}); swap them.")
     params = _params(loc, hloc, lang=lang, offset=offset, pagesize=_page_size(rows), sort=sort,
                      deals_as_array=1, add_metadata=True, asd=False, price_range=1,
                      bpmin=price_min or 0.0, bpmax=price_max or 250000.0,
@@ -840,9 +838,11 @@ async def browse_category(category: str, *, loc: Country = "at",
     try:
         response = await _post("categorylist", {"category": category, "params": params})
     except UpstreamError as exc:
+        if exc.status != 400:
+            raise
         raise UpstreamError(
             f"{exc} '{category}' is probably not a valid category code -- use "
-            f"list_categories to look one up."
+            f"list_categories to look one up.", exc.status
         ) from exc
     data = response.get("response") or {}
     products = data.get("productlist") or data.get("products") or []
@@ -856,8 +856,7 @@ async def browse_category(category: str, *, loc: Country = "at",
 
 
 @mcp.tool()
-@_tool_errors
-async def compare_products(product_ids: list[Union[int, str]], *, loc: Country = "at",
+async def compare_products(product_ids: list[int], *, loc: Country = "at",
                            lang: Literal["en", "de"] = "en") -> dict:
     """Compare several products side by side, e.g. to help the user pick
     between a shortlist of alternatives. Returns ``{products: [...]}`` where
@@ -881,16 +880,15 @@ async def compare_products(product_ids: list[Union[int, str]], *, loc: Country =
         loc: Country site for pricing: "at", "de", "eu", "uk", "pl" or "sk".
         lang: Display language for names/labels, "en" (default) or "de".
     """
-    ids = [int(i) for i in product_ids]
     products = (await _post("compare_products",
-                            {"ids": ids, "params": _params(loc, None, lang=lang)})).get("response") or []
+                            {"ids": product_ids, "params": _params(loc, None, lang=lang)})).get("response") or []
 
     # The compare endpoint does not return pricing reliably for every id, so
     # backfill the best price / offer count from products_details.
     price_map: dict = {}
     try:
         details = (await _post("products_details",
-                               {"id": ids, "params": _params(loc, None, lang=lang,
+                               {"id": product_ids, "params": _params(loc, None, lang=lang,
                                                              images=1, availability=1)})).get("response") or {}
         # products_details keys its response by product id.
         entries = details.values() if isinstance(details, dict) else details
@@ -927,7 +925,6 @@ DEALS_POOL = 300
 
 
 @mcp.tool()
-@_tool_errors
 async def get_deals(
     *,
     sort: Literal["percent", "price", "latest", "popularity", "top"] = "percent",
@@ -1117,7 +1114,6 @@ async def _detect_category(model: str, wanted: set, *, loc: str, hloc) -> Option
 
 
 @mcp.tool()
-@_tool_errors
 async def get_model_price_range(
     model: str,
     *,
@@ -1165,7 +1161,7 @@ async def get_model_price_range(
     site = _site(loc)
     wanted = set(_title_tokens(model))
     if not wanted:
-        return {"error": f"nothing searchable in the model name {model!r}"}
+        raise ToolError(f"Nothing searchable in the model name {model!r}.")
 
     detected = None
     if category is None:
@@ -1212,7 +1208,6 @@ async def get_model_price_range(
 
 
 @mcp.tool()
-@_tool_errors
 async def match_geizhals(
     title: str,
     *,
@@ -1248,7 +1243,7 @@ async def match_geizhals(
     """
     tokens = _title_tokens(title)
     if not tokens:
-        return {"error": f"nothing searchable left in the title {title!r}"}
+        raise ToolError(f"Nothing searchable left in the title {title!r} once the ad words are dropped.")
     # long ad titles are mostly prose; the leading words carry the product
     query = " ".join(tokens[:8])
     site = _site(loc)
