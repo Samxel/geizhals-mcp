@@ -19,6 +19,7 @@ import unicodedata
 import urllib.parse
 import functools
 import argparse
+import inspect
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Literal
@@ -225,7 +226,9 @@ def _tool(fn=None, *, annotations: ToolAnnotations = ONLINE):
     its null fields left out. Left to the SDK, a dict is pretty-printed with a
     two-space indent, which is about a third of a typical result's tokens.
     structured_output stays off: it would send every result a second time as
-    structuredContent and add an output schema to the tool listing."""
+    structuredContent and add an output schema to the tool listing. The
+    docstring is dedented here because only Python 3.13+ does that itself; on
+    older ones every description line would carry four spaces of indent."""
     if fn is None:
         return functools.partial(_tool, annotations=annotations)
 
@@ -233,7 +236,8 @@ def _tool(fn=None, *, annotations: ToolAnnotations = ONLINE):
     async def wrapper(*args, **kwargs):
         result = await fn(*args, **kwargs)
         return json.dumps(_prune(result), ensure_ascii=False, separators=(",", ":"))
-    return mcp.tool(annotations=annotations, structured_output=False)(wrapper)
+    return mcp.tool(description=inspect.cleandoc(fn.__doc__ or ""), annotations=annotations,
+                    structured_output=False)(wrapper)
 
 
 def _params(loc: str, hloc: Optional[list[str]], *, lang: str = "en", **extra) -> dict:
