@@ -52,6 +52,17 @@ async def test_browse_compare_and_deals(call):
     assert deals["deals"]
 
 
+async def test_sort_keys_take_effect(call):
+    dearest = await call("search_geizhals", query="rtx 5070", sort="-p", rows=10)
+    prices = [hit["best_price"] for hit in dearest["results"]]
+    assert prices == sorted(prices, reverse=True)
+    rated = await call("browse_category", category="gra16_512", sort="bew", rows=5)
+    assert all(hit.get("rating_stars") for hit in rated["results"])
+    newest = await call("browse_category", category="gra16_512", sort="n", rows=5)
+    ids = [hit["id"] for hit in newest["results"]]
+    assert ids == sorted(ids, reverse=True)
+
+
 async def test_model_price_range_and_matching(call):
     model = await call("get_model_price_range", model="Ryzen 7 7800X3D")
     assert model["category_code"] == "cpuamdam4"

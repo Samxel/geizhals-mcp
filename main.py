@@ -47,8 +47,12 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s: %(mes
 # pricing/site, `hloc` the shops to include.
 Country = Literal["at", "de", "eu", "uk", "pl", "sk"]
 
-# Sort keys seen in the app (t = default relevance, p = price, n = newest).
-Sort = Literal["", "t", "p", "n", "r"]
+# Sort keys each endpoint actually honours (checked against the live API).
+# search_product silently ignores anything but relevance and price, so "n" and
+# "r" there would only look like they worked; categorylist rejects unknown keys
+# with a 400 and reads "r" as a price sort, its rating sort is "bew".
+Sort = Literal["", "p", "-p"]
+CategorySort = Literal["t", "p", "-p", "n", "bew"]
 
 
 # ---------------------------------------------------------------------------
@@ -577,8 +581,9 @@ async def search_geizhals(
             ``category_code``) or from ``list_categories``.
         manufacturer: Restrict to a manufacturer id from a prior call's
             ``facets.manufacturers``.
-        sort: "" (relevance, default), "p" (price), "n" (newest) or "r"
-            (rating). Note that "p" also *narrows* the result set: Geizhals
+        sort: "" (relevance, default), "p" (cheapest first) or "-p" (dearest
+            first) -- search has no newest or rating order, ``browse_category``
+            does. Note that a price sort also *narrows* the result set: Geizhals
             cannot price-order a product that has no price, so products with no
             live offers drop out of both ``results`` and ``total`` (a query with
             289 hits returns 145 under "p"). Use it when you only want things
@@ -810,7 +815,7 @@ async def get_product_ratings(product_id: int, *, rows: int = 10,
 @mcp.tool()
 async def browse_category(category: str, *, loc: Country = "at",
                           hloc: Optional[list[Country]] = None,
-                          lang: Literal["en", "de"] = "en", sort: Sort = "t",
+                          lang: Literal["en", "de"] = "en", sort: CategorySort = "t",
                           price_min: Optional[float] = None, price_max: Optional[float] = None,
                           rows: int = 20, offset: int = 0) -> dict:
     """List products belonging to one category, browsed by category code
@@ -832,8 +837,8 @@ async def browse_category(category: str, *, loc: Country = "at",
         loc: Country site for pricing: "at", "de", "eu", "uk", "pl" or "sk".
         hloc: Which shop countries' offers to include; defaults to ``[loc]``.
         lang: Display language for names/labels, "en" (default) or "de".
-        sort: "t" (default relevance), "p" (price), "n" (newest) or "r"
-            (rating).
+        sort: "t" (relevance, default), "p" (cheapest first), "-p" (dearest
+            first), "n" (newest listings) or "bew" (best rated).
         price_min / price_max: Optional best-price bounds to filter to.
         rows: Max results to return (page size), at most 50. Default 20.
         offset: Paging offset into the result set. Default 0.
