@@ -61,6 +61,13 @@ async def test_german_site_answers_in_euro(call):
     assert deals["deals"]
 
 
+async def test_lang_names_categories(call):
+    english = await call("search_geizhals", query="ryzen 7 7800x3d", rows=1)
+    german = await call("search_geizhals", query="ryzen 7 7800x3d", rows=1, lang="de")
+    assert english["results"][0]["category"][1] == "Processors (CPUs)"
+    assert german["results"][0]["category"][1] == "Prozessoren (CPUs)"
+
+
 async def test_sort_keys_take_effect(call):
     dearest = await call("search_geizhals", query="rtx 5070", sort="-p", rows=10)
     prices = [hit["best_price"] for hit in dearest["results"]]

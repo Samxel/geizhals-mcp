@@ -249,16 +249,19 @@ def _walk_categories(nodes, trail, trail_de, out):
         _walk_categories(nd.get("childs", []), path, path_de, out)
 
 
-def _category_paths() -> dict[str, list[str]]:
-    """code -> label path, so a category listing can name its category the same
-    way a search hit does instead of only echoing the code back."""
+def _category_paths() -> dict[str, dict[str, list[str]]]:
+    """lang -> code -> label path. search_product ignores `lang` and always
+    labels at/de hits in German, so hits and facets are named from the shipped
+    tree instead, which also lets a category listing name its category the same
+    way a search hit does."""
     flat: list = []
     _walk_categories(_CATEGORIES, [], [], flat)
-    paths: dict[str, list[str]] = {}
-    for node, path, _ in flat:
+    paths: dict[str, dict[str, list[str]]] = {"en": {}, "de": {}}
+    for node, path, path_de in flat:
         code = _cat_code(node)
         if code:
-            paths.setdefault(code, path.split(" / "))
+            paths["en"].setdefault(code, path.split(" / "))
+            paths["de"].setdefault(code, path_de.split(" / "))
     return paths
 
 
@@ -332,7 +335,7 @@ def _currency(p: dict) -> Optional[str]:
     return None
 
 
-def _summarize_search_hit(p: dict, site: str = "geizhals.at") -> dict:
+def _summarize_search_hit(p: dict, site: str = "geizhals.at", lang: str = "en") -> dict:
     urls = p.get("urls") or {}
     prices = p.get("prices") or {}
     best_price = _to_float(prices.get("best"))
@@ -344,7 +347,8 @@ def _summarize_search_hit(p: dict, site: str = "geizhals.at") -> dict:
         "name": _clean_html(p.get("product") or p.get("product_for_sort")),
         "manufacturer": p.get("manufacturer_name"),
         # uncategorised hits (Amazon passthrough listings) carry category: null
-        "category": [c.get("label") for c in (p.get("category") or []) if isinstance(c, dict)],
+        "category": (_CATEGORY_PATH[lang].get(_leaf_cat(p.get("category")) or "")
+                     or [c.get("label") for c in (p.get("category") or []) if isinstance(c, dict)]),
         "category_code": _leaf_cat(p.get("category")),
         "best_price": best_price,
         "avg_price": _to_float(prices.get("avg")),
@@ -434,7 +438,7 @@ def _summarize_deal(d: dict) -> dict:
     }
 
 
-def _summarize_category_hit(p: dict, category: Optional[str] = None) -> dict:
+def _summarize_category_hit(p: dict, category: Optional[str] = None, lang: str = "en") -> dict:
     """Normalize a categorylist product into the same shape ``search_geizhals``
     returns (categorylist ships raw, inconsistent fields otherwise), so code
     that reads either source sees the same keys."""
@@ -447,7 +451,7 @@ def _summarize_category_hit(p: dict, category: Optional[str] = None) -> dict:
         "variant_id": p.get("variant_id"),
         "name": _clean_html(p.get("product_for_sort") or p.get("product")),
         # every hit of a category listing is in that category by definition
-        "category": _CATEGORY_PATH.get(category or ""),
+        "category": _CATEGORY_PATH[lang].get(category or ""),
         "category_code": category,
         "best_price": best_price,
         "currency": pricing.get("loc_currency"),
@@ -608,9 +612,11 @@ async def search_geizhals(
     price_range = {"min": price_range.get("min") or None, "max": price_range.get("max") or None}
     return {
         "total": data.get("total"),
-        "results": [_summarize_search_hit(p, site) for p in (data.get("products") or [])[:rows]],
+        "results": [_summarize_search_hit(p, site, lang) for p in (data.get("products") or [])[:rows]],
         "facets": {
-            "categories": [{"id": c.get("id"), "name": c.get("name"), "count": c.get("count")}
+            "categories": [{"id": c.get("id"),
+                            "name": (_CATEGORY_PATH[lang].get(c.get("id") or "") or [c.get("name")])[-1],
+                            "count": c.get("count")}
                            for c in (facets.get("categories") or [])],
             "manufacturers": [{"id": m.get("id"), "name": m.get("name"), "count": m.get("count")}
                               for m in (facets.get("manufacturer") or [])],
@@ -870,13 +876,12 @@ async def browse_category(category: str, *, loc: Country = "at",
         "total": data.get("total"),
         # unlike the search facet, this one is real
         "price_range": data.get("price_range"),
-        "results": [_summarize_category_hit(p, category) for p in products[:rows] if isinstance(p, dict)],
+        "results": [_summarize_category_hit(p, category, lang) for p in products[:rows] if isinstance(p, dict)],
     }
 
 
 @mcp.tool()
-async def compare_products(product_ids: list[int], *, loc: Country = "at",
-                           lang: Literal["en", "de"] = "en") -> dict:
+async def compare_products(product_ids: list[int], *, loc: Country = "at") -> dict:
     """Compare several products side by side, e.g. to help the user pick
     between a shortlist of alternatives. Returns ``{products: [...]}`` where
     each product has its name, manufacturer, best price, rating and a
@@ -884,7 +889,8 @@ async def compare_products(product_ids: list[int], *, loc: Country = "at",
     out and dates normalized to ISO. Geizhals unions the property list across
     everything being compared, so properties that do not apply to a product
     (a pump's "Förderhöhe" on a printhead) are dropped from its ``specs``
-    rather than left as an empty string that reads like missing data.
+    rather than left as an empty string that reads like missing data. Spec
+    labels and values are German, Geizhals has no English spec sheet.
 
     Pricing missing from the comparison response is backfilled from
     ``products_details``. ``available`` is false when a product genuinely has
@@ -897,20 +903,19 @@ async def compare_products(product_ids: list[int], *, loc: Country = "at",
         product_ids: The Geizhals product ids (``gzhid``) to compare, at most
             10; pass two or more for a meaningful side-by-side.
         loc: Country site for pricing, "at" (default) or "de".
-        lang: Display language for names/labels, "en" (default) or "de".
     """
     if not 1 <= len(product_ids) <= MAX_COMPARE:
         raise ToolError(f"Pass 1 to {MAX_COMPARE} product ids (got {len(product_ids)}); "
                         f"each one adds its full spec sheet.")
     products = (await _post("compare_products",
-                            {"ids": product_ids, "params": _params(loc, None, lang=lang)})).get("response") or []
+                            {"ids": product_ids, "params": _params(loc, None)})).get("response") or []
 
     # The compare endpoint does not return pricing reliably for every id, so
     # backfill the best price / offer count from products_details.
     price_map: dict = {}
     try:
         details = (await _post("products_details",
-                               {"id": product_ids, "params": _params(loc, None, lang=lang,
+                               {"id": product_ids, "params": _params(loc, None,
                                                              images=1, availability=1)})).get("response") or {}
         # products_details keys its response by product id.
         entries = details.values() if isinstance(details, dict) else details
@@ -1205,7 +1210,7 @@ async def get_model_price_range(
     result = {
         "model": model,
         "category_code": category,
-        "category": _CATEGORY_PATH.get(category or ""),
+        "category": _CATEGORY_PATH["en"].get(category or ""),
         "min": min(prices) if prices else None,
         "median": _median(prices),
         "max": max(prices) if prices else None,
