@@ -32,14 +32,16 @@ async def test_search_hits_and_facets_follow_lang(gpu_search, call):
 
 
 async def test_uncategorised_hits_keep_an_empty_path(api, call):
-    api.on("search_product", search_response([search_hit(2, "MIFCOM Gaming PC", best=2449.0, offers=1, cat=None)]))
+    api.on("search_product", search_response(
+        [search_hit(2, "MIFCOM Gaming PC", best=2449.0, offers=1, cat=None)]))
     hit = (await call("search_geizhals", query="mifcom"))["results"][0]
     assert hit["category"] == []
     assert "category_code" not in hit
 
 
 async def test_browse_names_its_category_in_lang(api, call):
-    api.on("categorylist", {"response": {"total": 1, "products": [category_hit(5, "Bosch WAN28127", best=467.0)]}})
+    api.on("categorylist", {"response": {
+        "total": 1, "products": [category_hit(5, "Bosch WAN28127", best=467.0)]}})
     english = await call("browse_category", category="hwaschf")
     german = await call("browse_category", category="hwaschf", lang="de")
     assert english["results"][0]["category"][-1] == "Washing Machines"

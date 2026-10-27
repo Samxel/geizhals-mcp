@@ -29,7 +29,8 @@ async def test_other_sites_are_rejected(api, call):
 
 
 async def test_de_site_prices_and_links(api, call):
-    api.on("search_product", search_response([search_hit(1, "AMD Ryzen 7 7800X3D, 8C/16T", best=279.0, offers=3)]))
+    api.on("search_product", search_response(
+        [search_hit(1, "AMD Ryzen 7 7800X3D, 8C/16T", best=279.0, offers=3)]))
     hit = (await call("search_geizhals", query="7800x3d", loc="de", hloc=["at", "de"]))["results"][0]
     assert hit["url"].startswith("https://geizhals.de/")
     params = api.sent("search_product")[0]["params"]

@@ -320,6 +320,13 @@ def _iso_date(ts) -> Optional[str]:
         return None
 
 
+def _iso_minute(ts) -> Optional[str]:
+    """Unix seconds -> "2026-10-27T13:05Z". Sorts the same as the timestamp."""
+    if not isinstance(ts, (int, float)):
+        return None
+    return datetime.fromtimestamp(ts, timezone.utc).strftime("%Y-%m-%dT%H:%MZ")
+
+
 _DE_DATE_RE = re.compile(r"^(\d{2})\.(\d{2})\.(\d{4})$")
 
 
@@ -344,7 +351,10 @@ def _site(loc: str) -> str:
 
 def _best_shop(p: dict) -> Optional[str]:
     for offer in p.get("offers") or []:
-        name = ((offer or {}).get("shop") or {}).get("name")
+        shop = (offer or {}).get("shop") or {}
+        # merchant_name is the shop's site name ("alza.at"), which is what
+        # search hits call it too; name is the company ("Alza.at GmbH")
+        name = shop.get("merchant_name") or shop.get("name")
         if name:
             return name
     return None
@@ -378,15 +388,12 @@ def _summarize_search_hit(p: dict, site: str = "geizhals.at", lang: str = "en") 
         "currency": _currency(p),
         "offer_count": offer_count,
         "available": available,
-        "status": "available" if available else "unavailable",
         "shop": _best_shop(p),
         "rating_stars": p.get("rating_stars"),
-        "rating_percent": p.get("rating_percent"),
         "rating_count": p.get("rating_count"),
-        "image": (_image_urls(p.get("images")) or [None])[0],
         "url": f"https://{site}{urls.get('overview')}" if urls.get("overview") else None,
         "mpn": p.get("mpn"),
-        "listed_since": p.get("listed_since"),
+        "listed_since": (p.get("listed_since") or "")[:10] or None,
     }
     # A product with no live offers would otherwise be nothing but nulls. The
     # all-time extrema come with the search response, so give the EOL anchor
@@ -419,11 +426,9 @@ def _summarize_product(p: dict, site: str = "geizhals.at") -> dict:
         "offer_count": offer_count,
         "available": bool(best_price is not None and (offer_count or 0) > 0),
         "shop": _best_shop(p),
-        "listed_since": p.get("listed_since"),
+        "listed_since": (p.get("listed_since") or "")[:10] or None,
         "variant_count": p.get("variant_count"),
         "rating_stars": p.get("rating_stars"),
-        "rating_percent": p.get("rating_percent"),
-        "rating_comments": p.get("rating_comments"),
         "rating_count": p.get("rating_count"),
         # bestprices is the observed range over the product's whole listed
         # history, not the price on offer today.
@@ -437,13 +442,13 @@ def _summarize_product(p: dict, site: str = "geizhals.at") -> dict:
     }
 
 
-def _summarize_deal(d: dict) -> dict:
-    img = d.get("image_thumb")
+def _summarize_deal(d: dict, site: str = "geizhals.at") -> dict:
     return {
         "id": d.get("id"),
         "name": _clean_html(d.get("product")),
         "manufacturer": d.get("manufacturer_name"),
         "category": d.get("category_path") or d.get("cat_name"),
+        "category_code": d.get("cat"),
         "change_percent": d.get("change_in_percent"),
         "change_amount": d.get("change_in_local"),
         "old_price": d.get("old_price"),
@@ -455,9 +460,10 @@ def _summarize_deal(d: dict) -> dict:
         "rating_stars": d.get("rating_stars"),
         "rating_count": d.get("rating_count"),
         "shop": d.get("hname"),
-        "timestamp": d.get("timestamp"),
-        "image": (_image_urls([img]) or [None])[0],
-        "url": d.get("best_deep_link"),
+        "changed_at": _iso_minute(d.get("timestamp")),
+        # best_deep_link is a 300-character tracking redirect to the shop; the
+        # product page is what an answer links to, and its short form is enough
+        "url": f"https://{site}/a{d['id']}.html" if d.get("id") else None,
     }
 
 
@@ -480,13 +486,11 @@ def _summarize_category_hit(p: dict, category: Optional[str] = None, lang: str =
         "currency": pricing.get("loc_currency"),
         "offer_count": offer_count,
         "available": available,
-        "status": "available" if available else "unavailable",
         "shop": p.get("best_merch_name"),
         "rating_stars": p.get("rating_stars"),
-        "rating_percent": p.get("rating_percent"),
         "rating_count": p.get("rating_count"),
-        "image": p.get("image_n") or p.get("image_m") or p.get("image_thumb"),
-        "url": p.get("product_link"),
+        # product_link carries the listing's own ?vl=..&hloc=.. query
+        "url": (p.get("product_link") or "").split("?")[0] or None,
         "mpn": p.get("mpn"),
     }
 
@@ -524,14 +528,22 @@ def _summarize_compare(p: dict, price_map: dict) -> dict:
         "currency": pricing.get("loc_currency"),
         "offers": offers,
         "available": available,
-        "status": "available" if available else "unavailable",
-        "rating_percent": rating.get("rate_perc"),
         "rating_stars": _to_float(rating.get("rate_val")),
         "rating_count": rating.get("count"),
-        "image": p.get("image"),
         "url": urllib.parse.unquote(share) if share else None,
         "specs": specs,
     }
+
+
+# A broad query brings 20+ manufacturers and a dozen categories; the largest
+# ones are what a narrower follow-up call picks from.
+FACET_LIMIT = 10
+
+
+def _largest(facet: Optional[list]) -> list[dict]:
+    """The FACET_LIMIT biggest buckets of a facet list, largest first."""
+    buckets = [b for b in facet or [] if isinstance(b, dict)]
+    return sorted(buckets, key=lambda b: -(b.get("count") or 0))[:FACET_LIMIT]
 
 
 async def _search_products(query: str, *, loc: str, hloc, lang: str, category=None,
@@ -580,7 +592,7 @@ async def search_geizhals(
     product, to ``get_price_history`` for the trend, and to
     ``compare_products`` for specs.
 
-    A hit with ``status: "unavailable"`` has no live offers (discontinued or
+    A hit with ``available: false`` has no live offers (discontinued or
     temporarily unlisted); those additionally carry ``alltime_price_min`` /
     ``alltime_price_max`` / ``alltime_last_date``, so a list of old hardware is
     still priceable without a call per hit. ``get_product`` adds the exact
@@ -640,9 +652,9 @@ async def search_geizhals(
             "categories": [{"id": c.get("id"),
                             "name": (_CATEGORY_PATH[lang].get(c.get("id") or "") or [c.get("name")])[-1],
                             "count": c.get("count")}
-                           for c in (facets.get("categories") or [])],
+                           for c in _largest(facets.get("categories"))],
             "manufacturers": [{"id": m.get("id"), "name": m.get("name"), "count": m.get("count")}
-                              for m in (facets.get("manufacturer") or [])],
+                              for m in _largest(facets.get("manufacturer"))],
             "price_range": price_range,
         },
     }
@@ -678,8 +690,8 @@ async def get_product(product_id: int, *, loc: Country = "at",
     manufacturer, category, rating, image urls, a link to the shop offers, and
     how many test reviews exist.
 
-    ``status`` is "available" or "unavailable"; the ``alltime_*`` fields are the
-    range observed over the product's whole listed history, not today's price.
+    The ``alltime_*`` fields are the range observed over the product's whole
+    listed history, not today's price.
     ``variant_count`` is how many sibling variants share this product's
     ``variant_id`` (that id identifies the family, not this product).
     When a product has no live offers (discontinued or temporarily unlisted)
@@ -709,7 +721,6 @@ async def get_product(product_id: int, *, loc: Country = "at",
     if not response:
         raise ToolError(f"No product with id {product_id}.")
     product = _summarize_product(response[0], _site(loc))
-    product["status"] = "available" if product["available"] else "unavailable"
     if not product["available"]:
         product.update(await _last_known_price(product_id, loc))
     return product
@@ -734,8 +745,8 @@ async def get_price_history(product_id: int, *, days: int = 31,
     ``window_min`` / ``window_max`` / ``window_avg`` / ``window_change_percent``
     describe the requested window only, while ``alltime_min`` / ``alltime_max``
     / ``alltime_first_date`` / ``alltime_last_date`` cover the product's whole
-    listed history. ``status`` is "available" or "unavailable"; for an
-    unavailable (discontinued or unlisted) product ``last_price`` plus
+    listed history. For an unavailable (discontinued or unlisted) product
+    ``last_price`` plus
     ``days_since_last_price`` tell you how stale the last data point is -- a
     large number there means the price is historical, not current.
 
@@ -783,7 +794,7 @@ async def get_price_history(product_id: int, *, days: int = 31,
     result = {
         "window_days": window,
         "points": len(points),
-        "status": "available" if current_best is not None else "unavailable",
+        "available": current_best is not None,
         "current_best": current_best,
         "last_price": last_price,
         "last_price_date": last_date,
@@ -804,24 +815,21 @@ async def get_price_history(product_id: int, *, days: int = 31,
 
 
 @_tool
-async def get_product_ratings(product_id: int, *, rows: int = 10,
-                              sort: Literal["latest", "helpful"] = "latest",
-                              loc: Country = "at") -> dict:
+async def get_product_ratings(product_id: int, *, loc: Country = "at") -> dict:
     """Aggregate user ratings for a product: average rating, total count,
     and the count per star (1-5). Returns a ``reviews_url`` link rather than
     the individual review texts.
 
     Args:
         product_id: The Geizhals product id (``gzhid``).
-        rows: Max number of underlying reviews Geizhals aggregates over.
-            Default 10.
-        sort: "latest" (default) or "helpful".
         loc: Country site the ``reviews_url`` should point at, "at" (default)
             or "de".
     """
+    # pagesize/sort only page the review texts, which are not returned; the
+    # aggregates always cover every rating
     payload = {
         "product_id": product_id, "filter_ghonly": 0, "offset": 0,
-        "pagesize": _page_size(rows), "sort": sort, "params": {"comments": True},
+        "pagesize": 1, "sort": "latest", "params": {"comments": True},
     }
     data = await _post("query_product_ratings", payload)
     per_star = data.get("per_star_rating_count") or {}
@@ -838,7 +846,7 @@ async def get_product_ratings(product_id: int, *, rows: int = 10,
         "product_name": _clean_html(data.get("product_name")),
         "average": data.get("aggregate_star_rating"),
         "total": total,
-        "per_star": per_star,
+        "per_star": {star: per_star[star] for star in sorted(per_star, reverse=True)},
         "reviews_url": url,
     }
 
@@ -856,7 +864,7 @@ async def browse_category(category: str, *, loc: Country = "at",
     for graphics cards); don't guess codes.
 
     Hits have the same shape as ``search_geizhals`` results (``best_price``,
-    ``offer_count``, ``currency``, ``available`` / ``status``, ``shop``,
+    ``offer_count``, ``currency``, ``available``, ``shop``,
     ``rating_*``, ``mpn``, ``category``), so code can read either source; only
     ``avg_price``, ``manufacturer`` and ``listed_since`` are missing, because
     the category feed does not carry them. Unlike the search facet, the
@@ -899,7 +907,8 @@ async def browse_category(category: str, *, loc: Country = "at",
         "total": data.get("total"),
         # unlike the search facet, this one is real
         "price_range": data.get("price_range"),
-        "results": [_summarize_category_hit(p, category, lang) for p in products[:rows] if isinstance(p, dict)],
+        "results": [_summarize_category_hit(p, category, lang)
+                    for p in products[:rows] if isinstance(p, dict)],
     }
 
 
@@ -1022,7 +1031,7 @@ async def get_deals(
     limit = _cap(limit, "limit")
     params = _params(loc, hloc, lang=lang, limit=max(limit, DEALS_POOL), price_range=1)
     data = (await _post("bestprice_development", {"params": params})).get("response") or {}
-    deals = [_summarize_deal(d) for d in (data.get("deals") or [])]
+    deals = [_summarize_deal(d, _site(loc)) for d in (data.get("deals") or [])]
     scanned = len(deals)
     top_deal_count = sum(1 for d in deals if d["top_deal"])
 
@@ -1037,7 +1046,7 @@ async def get_deals(
     elif sort == "price":
         deals.sort(key=lambda d: d["best_price"] if d["best_price"] is not None else float("inf"))
     elif sort == "latest":
-        deals.sort(key=lambda d: d["timestamp"] or 0, reverse=True)
+        deals.sort(key=lambda d: d["changed_at"] or "", reverse=True)
     elif sort == "popularity":
         deals.sort(key=lambda d: d["rank"] or 10 ** 9)
     elif sort == "top":
@@ -1082,6 +1091,11 @@ _VARIANT_TOKENS = {"ti", "super", "xt", "xtx", "pro", "max", "plus", "ultra", "m
 # or phone being matched, so they cover every query word and would otherwise
 # score like the product itself.
 _UNCATEGORISED_FACTOR = 0.6
+
+# What a match needs to be acted on; the rest of a search hit is a get_product
+# call away once the right candidate is known.
+_CANDIDATE_FIELDS = {"id", "name", "category_code", "best_price", "offer_count", "available", "shop",
+                     "url", "alltime_price_min", "alltime_price_max", "alltime_last_date"}
 
 
 def _title_tokens(text: str) -> list[str]:
@@ -1325,7 +1339,8 @@ async def match_geizhals(
         if not hit["category_code"]:
             score = round(score * _UNCATEGORISED_FACTOR, 3)
         if score:
-            candidates.append({"confidence": score, **hit})
+            candidates.append({"confidence": score,
+                               **{k: v for k, v in hit.items() if k in _CANDIDATE_FIELDS}})
     candidates.sort(key=lambda c: (-c["confidence"], c["best_price"] is None))
     result = {"query": query, "count": len(candidates), "candidates": candidates[:limit]}
     if not candidates:
