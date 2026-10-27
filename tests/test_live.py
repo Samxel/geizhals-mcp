@@ -91,4 +91,4 @@ async def test_marketplace_prebuilts_score_below_a_safe_match(call):
     match = await call("match_geizhals", title="Gigabyte RTX 5070 Windforce OC 12GB NEU OVP mit Rechnung",
                        limit=20)
     assert match["candidates"][0]["category_code"] == "gra16_512"
-    assert all(c["confidence"] < 0.8 for c in match["candidates"] if not c["category_code"])
+    assert all(c["confidence"] < 0.8 for c in match["candidates"] if not c.get("category_code"))

@@ -35,7 +35,7 @@ async def test_uncategorised_hits_keep_an_empty_path(api, call):
     api.on("search_product", search_response([search_hit(2, "MIFCOM Gaming PC", best=2449.0, offers=1, cat=None)]))
     hit = (await call("search_geizhals", query="mifcom"))["results"][0]
     assert hit["category"] == []
-    assert hit["category_code"] is None
+    assert "category_code" not in hit
 
 
 async def test_browse_names_its_category_in_lang(api, call):

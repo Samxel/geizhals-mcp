@@ -11,6 +11,7 @@ import base64
 import html
 import unicodedata
 import urllib.parse
+import functools
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Literal
@@ -161,6 +162,28 @@ async def _post(endpoint: str, payload: dict) -> dict:
         logger.warning("Request to '%s' failed (attempt %d/%d), retrying in %.1fs",
                         url, attempt + 1, MAX_RETRIES + 1, delay)
         await asyncio.sleep(delay)
+
+
+def _prune(value):
+    """Drop the null fields from every dict in `value`; lists keep their items."""
+    if isinstance(value, dict):
+        return {k: _prune(v) for k, v in value.items() if v is not None}
+    if isinstance(value, list):
+        return [_prune(v) for v in value]
+    return value
+
+
+def _tool(fn):
+    """Register `fn` as a tool whose dict result goes out as compact JSON with
+    its null fields left out. Left to the SDK, a dict is pretty-printed with a
+    two-space indent, which is about a third of a typical result's tokens.
+    structured_output stays off: it would send every result a second time as
+    structuredContent and add an output schema to the tool listing."""
+    @functools.wraps(fn)
+    async def wrapper(*args, **kwargs):
+        result = await fn(*args, **kwargs)
+        return json.dumps(_prune(result), ensure_ascii=False, separators=(",", ":"))
+    return mcp.tool(structured_output=False)(wrapper)
 
 
 def _params(loc: str, hloc: Optional[list[str]], *, lang: str = "en", **extra) -> dict:
@@ -532,7 +555,7 @@ async def _search_products(query: str, *, loc: str, hloc, lang: str, category=No
 # ---------------------------------------------------------------------------
 # Tools
 # ---------------------------------------------------------------------------
-@mcp.tool()
+@_tool
 async def search_geizhals(
     query: str,
     *,
@@ -571,8 +594,8 @@ async def search_geizhals(
     ``facets`` lists the categories and manufacturers present in the full
     result set with counts -- use these to decide values for ``category`` /
     ``manufacturer`` on a follow-up, narrower call rather than guessing ids.
-    ``facets.price_range.min`` is null because Geizhals reports the facet floor
-    as 0 whatever the hits cost; for a real range use the hits' ``best_price``
+    ``facets.price_range`` has no ``min`` because Geizhals reports the facet
+    floor as 0 whatever the hits cost; for a real range use the hits' ``best_price``
     or ``browse_category``, whose ``price_range`` is genuine.
 
     Args:
@@ -645,7 +668,7 @@ async def _last_known_price(product_id: int, loc: str) -> dict:
     return {}
 
 
-@mcp.tool()
+@_tool
 async def get_product(product_id: int, *, loc: Country = "at",
                       hloc: Optional[list[Country]] = None,
                       lang: Literal["en", "de"] = "en", n_offers: int = 20) -> dict:
@@ -700,7 +723,7 @@ def _weekly(points: list) -> list:
     return list(by_week.values())
 
 
-@mcp.tool()
+@_tool
 async def get_price_history(product_id: int, *, days: int = 31,
                             loc: Country = "at", include_series: bool = True,
                             granularity: Literal["day", "week"] = "day") -> dict:
@@ -780,7 +803,7 @@ async def get_price_history(product_id: int, *, days: int = 31,
     return result
 
 
-@mcp.tool()
+@_tool
 async def get_product_ratings(product_id: int, *, rows: int = 10,
                               sort: Literal["latest", "helpful"] = "latest",
                               loc: Country = "at") -> dict:
@@ -820,7 +843,7 @@ async def get_product_ratings(product_id: int, *, rows: int = 10,
     }
 
 
-@mcp.tool()
+@_tool
 async def browse_category(category: str, *, loc: Country = "at",
                           hloc: Optional[list[Country]] = None,
                           lang: Literal["en", "de"] = "en", sort: CategorySort = "t",
@@ -880,7 +903,7 @@ async def browse_category(category: str, *, loc: Country = "at",
     }
 
 
-@mcp.tool()
+@_tool
 async def compare_products(product_ids: list[int], *, loc: Country = "at") -> dict:
     """Compare several products side by side, e.g. to help the user pick
     between a shortlist of alternatives. Returns ``{products: [...]}`` where
@@ -894,7 +917,7 @@ async def compare_products(product_ids: list[int], *, loc: Country = "at") -> di
 
     Pricing missing from the comparison response is backfilled from
     ``products_details``. ``available`` is false when a product genuinely has
-    no current offers (discontinued or temporarily unlisted), so a null price
+    no current offers (discontinued or temporarily unlisted), so a missing price
     is distinguishable from a lookup failure -- for those, ``last_known_price``
     and ``last_known_date`` are filled in from the price history so an EOL
     product can still be compared against a used-market price.
@@ -951,7 +974,7 @@ async def compare_products(product_ids: list[int], *, loc: Country = "at") -> di
 DEALS_POOL = 300
 
 
-@mcp.tool()
+@_tool
 async def get_deals(
     *,
     sort: Literal["percent", "price", "latest", "popularity", "top"] = "percent",
@@ -1151,7 +1174,7 @@ async def _detect_category(model: str, wanted: set, *, loc: str, hloc) -> Option
     return max(by_category.items(), key=rank)[0]
 
 
-@mcp.tool()
+@_tool
 async def get_model_price_range(
     model: str,
     *,
@@ -1246,7 +1269,7 @@ async def get_model_price_range(
     return result
 
 
-@mcp.tool()
+@_tool
 async def match_geizhals(
     title: str,
     *,
@@ -1317,7 +1340,7 @@ async def match_geizhals(
     return result
 
 
-@mcp.tool()
+@_tool
 async def list_categories(query: Optional[str] = None, limit: int = 40) -> dict:
     """Look up category codes by name, for use with ``browse_category`` (and
     the ``category`` filter of ``search_geizhals``). Call this first whenever

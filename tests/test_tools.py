@@ -21,7 +21,7 @@ async def test_search_summarizes_hits_and_facets(api, call):
     assert hit["shop"] == "alza.at"
     assert hit["available"] is True
     assert result["facets"]["categories"] == [{"id": "gra16_512", "name": "PCIe", "count": 82}]
-    assert result["facets"]["price_range"]["min"] is None
+    assert result["facets"]["price_range"] == {"max": 5999}
     assert api.sent("search_product")[0]["params"]["pagesize"] == 5
 
 
