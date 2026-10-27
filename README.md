@@ -36,7 +36,7 @@ important fields to the AI.
   Search by free text or browse the **complete Geizhals category tree** (2200+ categories shipped with the server) to drill into exactly the right segment, then compare a shortlist side by side.
 
 - **Price a used listing**  
-  `match_geizhals` turns a classifieds ad headline into the Geizhals products it could be (with a confidence score), and `get_model_price_range` gives the new-price range across every variant of a model — the two numbers a "is this second-hand offer a deal" answer needs.
+  `match_geizhals` finds the Geizhals product behind a second-hand ad (with a confidence score), and `get_model_price_range` shows what that model costs new across all its variants. Together they answer "is this used offer a good deal?".
 
 ## Setup
 
@@ -107,8 +107,8 @@ Same URL, in the client's MCP config:
 
 ### Claude Desktop
 
-Custom connectors (**Settings > Connectors**) are dialled from Anthropic's
-cloud, so they cannot reach a server bound to your own machine. Two ways
+Custom connectors (**Settings > Connectors**) connect from Anthropic's cloud,
+so they cannot reach a server running only on your own machine. Two ways
 around it:
 
 **Let Claude Desktop start it over stdio.** Open **Settings > Developer > Edit
@@ -132,9 +132,9 @@ installed, `"command": "uv"` and `"args": ["run", "/path/to/geizhals-mcp/main.py
 
 **Or expose the server** (cloudflared, ngrok, or run it on a box with a public
 hostname) and add that HTTPS URL under **Settings > Connectors > Add custom
-connector**. That route also makes the tools available in claude.ai and the
-mobile apps, not just the desktop client but the API it talks to is then
-reachable by whoever finds the URL, so put auth in front of it.
+connector**. That way the tools also work in claude.ai and the mobile apps.
+Anyone who finds the URL can use the server too, though, so put
+authentication in front of it.
 
 Every tool is marked read-only, so clients that honour that hint won't ask
 before each call. In Claude Desktop you can also open **Settings > Connectors >
@@ -142,24 +142,24 @@ geizhals** and set the tools' dropdown on the right to **Always allow**.
 
 ## Tools
 
-The tools that take them share three parameters: `loc` is the country site,
+Most tools take three shared parameters: `loc` is the country site,
 `"at"` (default) or `"de"`; `hloc` lists the shop countries to include and
 defaults to `[loc]`; `lang` (`"en"` or `"de"`) sets the language of category
 names. Results come as compact JSON, and fields without a value are left out.
 
 <details>
-<summary><code>search_geizhals(query, ...)</code>: products by keyword, with live prices</summary>
+<summary><code>search_geizhals(query, ...)</code>: search products by keyword, with live prices</summary>
 
 Search products by keyword, with filters for category and manufacturer, sorting
 and paging (`rows` up to 50). Every hit carries its current `best_price`,
 `avg_price`, `offer_count`, `currency`, cheapest `shop`, `rating_*` and an
 `available` flag, so a plain price-or-rating question needs no follow-up call.
 Hits with no live offers add `alltime_price_min` / `alltime_price_max` /
-`alltime_last_date`, so a list of discontinued hardware is priceable without a
-call per hit. The facets list the ten largest categories and manufacturers to
-refine with.
+`alltime_last_date`, so even discontinued products come with a price, without
+a call per hit. The facets list the ten largest categories and manufacturers,
+to narrow the search with.
 
-`sort` takes `""` (relevance), `"p"` (cheapest first) or `"-p"` (dearest first);
+`sort` takes `""` (relevance), `"p"` (cheapest first) or `"-p"` (most expensive first);
 Geizhals has no newest or rating order for a search. A price sort narrows the
 result set as well as ordering it: Geizhals cannot price-order a product that
 has no price, so unavailable products leave both `results` and `total`.
@@ -167,7 +167,7 @@ has no price, so unavailable products leave both `results` and `total`.
 </details>
 
 <details>
-<summary><code>get_product(product_id, n_offers=5)</code>: one product in full, with its cheapest shops</summary>
+<summary><code>get_product(product_id, n_offers=5)</code>: get one product in full, with its cheapest shops</summary>
 
 Full detail of one product: current best price and offer count, name, category,
 rating, images, GTIN, offer link, all-time price range and test-review count.
@@ -178,24 +178,24 @@ shop's own stock text and its rating. A product with no live offers gets its
 </details>
 
 <details>
-<summary><code>get_price_history(product_id, days=31)</code>: how the price moved</summary>
+<summary><code>get_price_history(product_id, days=31)</code>: see how the price moved over time</summary>
 
-Window (`window_min/max/avg/change_percent`) and all-time (`alltime_min/max`)
-summaries kept strictly apart, plus a `[iso_date, price]` series that only
-lists the days the price changed. `granularity="day"` or `"week"` give a point
+Returns a summary of the requested window (`window_min/max/avg/change_percent`)
+and, kept separate, of the product's whole history (`alltime_min/max`), plus a
+`[iso_date, price]` series that only lists the days the price changed. `granularity="day"` or `"week"` give a point
 per day or per week instead, and `include_series=False` leaves the series out.
 
 </details>
 
 <details>
-<summary><code>get_product_ratings(product_id)</code>: user ratings</summary>
+<summary><code>get_product_ratings(product_id)</code>: get a product's user ratings</summary>
 
 Average rating, totals, per-star counts and the reviews link.
 
 </details>
 
 <details>
-<summary><code>browse_category(category, ...)</code>: the products of one category</summary>
+<summary><code>browse_category(category, ...)</code>: list the products of one category</summary>
 
 List the products in a category by its code, with price bounds, paging (`rows`
 up to 50) and sorting: `"t"` (relevance), `"p"` / `"-p"` (price up or down),
@@ -206,7 +206,7 @@ category's real one (the search facet's is not).
 </details>
 
 <details>
-<summary><code>compare_products(product_ids)</code>: products side by side, with specs</summary>
+<summary><code>compare_products(product_ids)</code>: compare products side by side, with specs</summary>
 
 Compare up to ten products side by side, specs included. Properties that don't
 apply to a product are dropped rather than shown as empty, and the specs are in
@@ -216,37 +216,37 @@ last known price.
 </details>
 
 <details>
-<summary><code>get_deals(sort="percent", ...)</code>: current price drops</summary>
+<summary><code>get_deals(sort="percent", ...)</code>: list current price drops</summary>
 
 Current price drops: products whose best price just fell, with the percent and
 amount off and a link to the product page. Sort by biggest `percent` drop,
 `price`, `latest`, `popularity` or `top` deals, and filter with
 `min_discount_percent` / `max_price`. Filters and sorting work over every
 current drop (about a thousand), and `limit` (up to 50) is how many matches come
-back. `next_offset` pages on through the rest; the feed is kept for two minutes,
-so the next page answers at once.
+back. `next_offset` fetches the next page; the feed is cached for two minutes,
+so further pages come back instantly.
 
 </details>
 
 <details>
-<summary><code>get_model_price_range(model, ...)</code>: what a model costs across its variants</summary>
+<summary><code>get_model_price_range(model, ...)</code>: see what a model costs across all its variants</summary>
 
-What a whole model costs right now across all its variants (`min`, `median`,
-`max` and the five cheapest) instead of one specific board partner card.
-Sibling models (`4070 Ti`, `4070 Super`) are kept out, and the result is always
-scoped to one category: an unscoped search for a pricey product is dominated by
-cases and water blocks below it and prebuilt systems above it, so the category
-is detected when you don't pass one and reported back as `category_code`. Up to
-300 search hits are considered.
+What a model costs right now across all its variants (`min`, `median`, `max`
+and the five cheapest), e.g. every RTX 5070 rather than one manufacturer's
+version. Sibling models (`4070 Ti`, `4070 Super`) are kept out. The result
+always comes from one category, because a plain search for a graphics card also
+turns up cheaper water blocks and cases and pricier complete PCs. If you don't
+pass a category, it is detected and returned as `category_code`. Up to 300
+search hits are considered.
 
 </details>
 
 <details>
-<summary><code>match_geizhals(title, ...)</code>: a classifieds ad title to Geizhals products</summary>
+<summary><code>match_geizhals(title, ...)</code>: find which product a second-hand ad is about</summary>
 
-Resolve a free-form listing title ("Gigabyte RTX 5070 Windforce OC 12GB NEU OVP
-mit Rechnung") to Geizhals products, each with a 0–1 `confidence` and its live
-price. Marketplace listings without a category (mostly prebuilt PCs that name
+Takes the title of a second-hand ad ("Gigabyte RTX 5070 Windforce OC 12GB NEU
+OVP mit Rechnung") and returns the Geizhals products it could be, each with a
+0–1 `confidence` and its current price. Marketplace listings without a category (mostly prebuilt PCs that name
 the card they contain) score low, so they don't pass for the card itself. When
 the top candidates are too close to separate, or nothing scores convincingly,
 a `note` says so rather than letting a coin-flip look like an answer.
@@ -254,7 +254,7 @@ a `note` says so rather than letting a coin-flip look like an answer.
 </details>
 
 <details>
-<summary><code>list_categories(query)</code>: category codes by name</summary>
+<summary><code>list_categories(query)</code>: look up category codes by name</summary>
 
 Browse Geizhals' category tree to find the category codes `browse_category`
 takes. Matches English or German names ("graphics cards" and "grafikkarten"

@@ -147,9 +147,9 @@ async def search_geizhals(
         query: Free-text search term.
         category: Category code to restrict to.
         manufacturer: Manufacturer id from ``facets.manufacturers``.
-        sort: "" (relevance, default), "p" (cheapest first) or "-p" (dearest
-            first). A price sort also drops products without a live price from
-            ``results`` and ``total``.
+        sort: "" (relevance, default), "p" (cheapest first) or "-p" (most
+            expensive first). A price sort also drops products without a live
+            price from ``results`` and ``total``.
         rows: Results per page, at most 50. Default 10.
         offset: Paging offset. Default 0.
     """
@@ -374,8 +374,8 @@ async def browse_category(category: str, *, loc: Country = "at",
 
     Args:
         category: Category code, e.g. "gra16_512" for graphics cards.
-        sort: "t" (relevance, default), "p" (cheapest first), "-p" (dearest
-            first), "n" (newest listings) or "bew" (best rated).
+        sort: "t" (relevance, default), "p" (cheapest first), "-p" (most
+            expensive first), "n" (newest listings) or "bew" (best rated).
         price_min / price_max: Optional bounds on the best price.
         rows: Results per page, at most 50. Default 20.
         offset: Paging offset. Default 0.
@@ -534,10 +534,10 @@ async def get_model_price_range(
     hloc: Optional[list[Country]] = None,
     max_variants: int = 300,
 ) -> dict:
-    """What a model costs right now across all its variants ("RTX 5070",
-    not one board partner's card): ``min``, ``median``, ``max`` and the five
-    ``cheapest`` with their ids. This is the new-price reference for a used
-    item.
+    """What a model costs right now across all its variants (every "RTX
+    5070", not one manufacturer's version): ``min``, ``median``, ``max`` and
+    the five ``cheapest`` with their ids. This is the new-price reference for
+    a used item.
 
     The numbers come from one category, because accessories and prebuilt
     systems that borrow the model's name would skew them badly. Without a
@@ -612,9 +612,9 @@ async def match_geizhals(
     hloc: Optional[list[Country]] = None,
     limit: int = 5,
 ) -> dict:
-    """Resolve a classifieds ad title (willhaben, eBay and the like) to the
-    Geizhals products it could be. Condition, packaging and sales words are
-    dropped first.
+    """Find the Geizhals products a second-hand ad (willhaben, eBay and the
+    like) could be about, from its title. Condition, packaging and sales words
+    are dropped first.
 
     Candidates are sorted by ``confidence``, a 0-1 token-overlap heuristic:
     0.8 and up is a safe match, 0.5 to 0.8 needs a look at the name, anything
