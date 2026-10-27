@@ -38,7 +38,38 @@ MCP_PATH = "/mcp"
 MAX_RETRIES = 2
 RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 
-mcp = MCPServer("geizhals-mcp")
+# Sent once when a client connects, so what every tool shares is said here
+# instead of in each tool's description, which the model reads on every turn.
+INSTRUCTIONS = """\
+Geizhals price comparison for Austria and Germany. All prices are in EUR.
+
+Which tool to use:
+- a product or model by name: search_geizhals. Its hits already carry the live \
+price, cheapest shop, rating and availability.
+- a product type such as "washing machines": list_categories, then browse_category.
+- what a model costs across all its variants: get_model_price_range.
+- a second-hand ad: match_geizhals, then get_model_price_range for the new price.
+- more on a known id: get_product, get_price_history, get_product_ratings or \
+compare_products.
+- current price drops: get_deals.
+
+Shared parameters: loc is the country site, "at" (default) or "de". hloc lists \
+the shop countries to include and defaults to [loc]. lang ("en" or "de") sets \
+the language of category names.
+
+id is one product. variant_id is shared by all sibling variants of a product \
+(the OC and non-OC version of a card), so group by it but never deduplicate by \
+it. Category codes come from list_categories, a hit's category_code or the \
+search facets; don't guess them.
+
+available: false means a product has no live offers right now (discontinued or \
+temporarily unlisted). Such hits carry their all-time price range, and \
+get_product adds the last known price.
+
+Fields without a value are left out of results.
+"""
+
+mcp = MCPServer("geizhals-mcp", instructions=INSTRUCTIONS)
 client = httpx.AsyncClient(http2=True)
 
 logger = logging.getLogger(__name__)
@@ -580,59 +611,29 @@ async def search_geizhals(
     rows: int = 10,
     offset: int = 0,
 ) -> dict:
-    """Search Geizhals products by free-text keyword, e.g. "iphone 15" or
-    "rtx 4070". This is the main entry point for finding products -- start
-    here unless you already have a product id or category code.
+    """Search products by keyword, e.g. "iphone 15" or "rtx 4070". Start here
+    unless you already have a product id or a category code.
 
-    Returns ``{total, results: [...], facets}``. Each hit already carries its
-    current ``best_price``, ``avg_price``, ``offer_count``, cheapest ``shop``,
-    ``currency``, ``rating_stars`` / ``rating_count`` and an ``available`` flag,
-    so a plain "what does X cost / how is it rated" needs no follow-up call. Go
-    to ``get_product`` only for images and the all-time range of a *listed*
-    product, to ``get_price_history`` for the trend, and to
-    ``compare_products`` for specs.
+    Returns ``{total, results, facets}``. Each hit carries its live
+    ``best_price``, ``avg_price``, ``offer_count``, cheapest ``shop``, rating and
+    ``available``, so "what does X cost" needs no second call. A hit with
+    ``available: false`` adds ``alltime_price_min`` / ``alltime_price_max`` /
+    ``alltime_last_date``. Geizhals caps ``total`` at 1000.
 
-    A hit with ``available: false`` has no live offers (discontinued or
-    temporarily unlisted); those additionally carry ``alltime_price_min`` /
-    ``alltime_price_max`` / ``alltime_last_date``, so a list of old hardware is
-    still priceable without a call per hit. ``get_product`` adds the exact
-    ``last_known_price`` when you need it for one of them.
-
-    ``id`` is the product; ``variant_id`` is **not** -- it is shared by every
-    sibling variant of the same family (the Twin Edge, Twin Edge OC and Twin
-    Edge OC White Edition of one card all carry the same one), so use it to
-    group siblings, never to deduplicate products.
-
-    ``facets`` lists the categories and manufacturers present in the full
-    result set with counts -- use these to decide values for ``category`` /
-    ``manufacturer`` on a follow-up, narrower call rather than guessing ids.
-    ``facets.price_range`` has no ``min`` because Geizhals reports the facet
-    floor as 0 whatever the hits cost; for a real range use the hits' ``best_price``
-    or ``browse_category``, whose ``price_range`` is genuine.
+    ``facets`` lists the largest categories and manufacturers of the whole
+    result set with counts, to narrow a follow-up call with ``category`` or
+    ``manufacturer``. ``facets.price_range`` has no ``min`` because Geizhals
+    reports that floor as 0 whatever the hits cost.
 
     Args:
         query: Free-text search term.
-        loc: Country site the prices are shown for, "at" (default) or "de".
-        hloc: Which shop countries' offers to include; defaults to ``[loc]``,
-            ``["at", "de"]`` takes both.
-        lang: Display language for names/labels in the results, "en" (default)
-            or "de".
-        category: Restrict to a category code, e.g. from a prior call's
-            ``facets.categories`` (each hit also carries its own
-            ``category_code``) or from ``list_categories``.
-        manufacturer: Restrict to a manufacturer id from a prior call's
-            ``facets.manufacturers``.
+        category: Category code to restrict to.
+        manufacturer: Manufacturer id from ``facets.manufacturers``.
         sort: "" (relevance, default), "p" (cheapest first) or "-p" (dearest
-            first) -- search has no newest or rating order, ``browse_category``
-            does. Note that a price sort also *narrows* the result set: Geizhals
-            cannot price-order a product that has no price, so products with no
-            live offers drop out of both ``results`` and ``total`` (a query with
-            289 hits returns 145 under "p"). Use it when you only want things
-            you can actually buy, and the default when you want the whole
-            population -- ``total`` is only comparable across calls that sort
-            the same way.
-        rows: Max results to return (page size), at most 50. Default 10.
-        offset: Paging offset into the result set. Default 0.
+            first). A price sort also drops products without a live price from
+            ``results`` and ``total``.
+        rows: Results per page, at most 50. Default 10.
+        offset: Paging offset. Default 0.
     """
     rows = _cap(rows, "rows")
     data = await _search_products(query, loc=loc, hloc=hloc, lang=lang, category=category,
@@ -684,31 +685,15 @@ async def _last_known_price(product_id: int, loc: str) -> dict:
 async def get_product(product_id: int, *, loc: Country = "at",
                       hloc: Optional[list[Country]] = None,
                       lang: Literal["en", "de"] = "en", n_offers: int = 20) -> dict:
-    """Look up full detail for a single product you already have the Geizhals
-    id for (from ``search_geizhals`` or ``browse_category`` results). Returns
-    the current ``best_price`` / ``offer_count`` / cheapest ``shop``, name,
-    manufacturer, category, rating, image urls, a link to the shop offers, and
-    how many test reviews exist.
-
-    The ``alltime_*`` fields are the range observed over the product's whole
-    listed history, not today's price.
-    ``variant_count`` is how many sibling variants share this product's
-    ``variant_id`` (that id identifies the family, not this product).
-    When a product has no live offers (discontinued or temporarily unlisted)
-    this adds ``last_known_price`` / ``last_known_date`` /
-    ``days_since_last_price`` from the price history, so an EOL product is still
-    comparable instead of a bare null. For the trend use ``get_price_history``,
-    for specs ``compare_products``, for review text ``get_product_ratings``.
+    """Full detail of one product: live ``best_price``, ``offer_count``,
+    cheapest ``shop``, rating, images, ``variant_count``, the number of test
+    reviews and the all-time price range (``alltime_*``, not today's price).
+    Without live offers it adds ``last_known_price``, ``last_known_date`` and
+    ``days_since_last_price``.
 
     Args:
-        product_id: The Geizhals product id (``gzhid``), e.g. from a search
-            hit's ``id`` field.
-        loc: Country site for pricing, "at" (default) or "de".
-        hloc: Which shop countries' offers to include; defaults to ``[loc]``,
-            ``["at", "de"]`` takes both.
-        lang: Display language for names/labels, "en" (default) or "de".
-        n_offers: Max number of individual shop offers to consider for the
-            best-price calculation. Default 20.
+        product_id: The Geizhals product id, e.g. a search hit's ``id``.
+        n_offers: How many shop offers to fetch. Default 20.
     """
     payload = {
         "query": str(product_id),
@@ -749,34 +734,22 @@ def _weekly(points: list) -> list:
 async def get_price_history(product_id: int, *, days: int = 31,
                             loc: Country = "at", include_series: bool = True,
                             granularity: Literal["change", "day", "week"] = "change") -> dict:
-    """Price history for a product, to answer "has this gotten cheaper / should
-    I wait" type questions, and to price a product that is no longer on sale.
+    """Price history of one product, for "has it got cheaper, should I
+    wait" and for pricing something that is no longer sold.
 
-    The summary fields keep window and all-time values strictly apart:
-    ``window_min`` / ``window_max`` / ``window_avg`` / ``window_change_percent``
-    describe the requested window only, while ``alltime_min`` / ``alltime_max``
-    / ``alltime_first_date`` / ``alltime_last_date`` cover the product's whole
-    listed history. For an unavailable (discontinued or unlisted) product
-    ``last_price`` plus ``days_since_last_price`` tell you how stale the last
-    data point is; a large number there means the price is historical, not
-    current.
-
-    The ``series`` only lists the days the price changed (plus the last day), so
-    a quiet year stays short. Pass ``include_series=False`` if the summary is
-    all you need.
+    ``window_*`` fields cover the requested window only, ``alltime_*`` the
+    product's whole listed history. When the product is not ``available``,
+    ``days_since_last_price`` says how old ``last_price`` is. The ``series`` of
+    ``[date, price]`` pairs only lists the days the price changed, plus the
+    last one.
 
     Args:
-        product_id: The Geizhals product id (``gzhid``).
-        days: History window. Geizhals only serves four fixed windows --
-            31, 91, 183 or 365 days (1/3/6/12 months) -- so any other value is
-            snapped to the nearest one. Default 31.
-        loc: Country site the prices are shown for, "at" (default) or "de".
-        include_series: Include the per-point ``series`` of
-            ``[iso_date, price]`` pairs. Default True; set False for just the
-            summary. ``points`` counts the daily observations in the window
-            regardless, so it stays comparable across both settings.
-        granularity: "change" (default, a point whenever the price moved),
-            "day" (every day) or "week" (each ISO week's last price).
+        product_id: The Geizhals product id.
+        days: 31, 91, 183 or 365; other values snap to the nearest. Default 31.
+        include_series: False for the summary alone. ``points`` counts the
+            daily observations either way.
+        granularity: "change" (default), "day" or "week" (each ISO week's last
+            price).
     """
     window = min(HISTORY_WINDOWS, key=lambda w: abs(w - days))
     payload = {"id": product_id, "params": {"days": window, "loc": loc, "hloc": []}}
@@ -827,14 +800,11 @@ async def get_price_history(product_id: int, *, days: int = 31,
 
 @_tool
 async def get_product_ratings(product_id: int, *, loc: Country = "at") -> dict:
-    """Aggregate user ratings for a product: average rating, total count,
-    and the count per star (1-5). Returns a ``reviews_url`` link rather than
-    the individual review texts.
+    """User ratings of one product: ``average``, ``total`` and the count
+    per star, plus a ``reviews_url``. The review texts are not included.
 
     Args:
-        product_id: The Geizhals product id (``gzhid``).
-        loc: Country site the ``reviews_url`` should point at, "at" (default)
-            or "de".
+        product_id: The Geizhals product id.
     """
     # pagesize/sort only page the review texts, which are not returned; the
     # aggregates always cover every rating
@@ -868,31 +838,21 @@ async def browse_category(category: str, *, loc: Country = "at",
                           lang: Literal["en", "de"] = "en", sort: CategorySort = "t",
                           price_min: Optional[float] = None, price_max: Optional[float] = None,
                           rows: int = 20, offset: int = 0) -> dict:
-    """List products belonging to one category, browsed by category code
-    rather than free-text search -- use this when the user names a category
-    ("graphics cards", "washing machines") instead of a specific product.
-    Use ``list_categories`` first to resolve the name to a code (e.g. "gra16"
-    for graphics cards); don't guess codes.
+    """List the products of one category, for when the user names a
+    product type ("washing machines") rather than a product. Take the code
+    from ``list_categories`` or a hit's ``category_code`` instead of guessing.
 
-    Hits have the same shape as ``search_geizhals`` results (``best_price``,
-    ``offer_count``, ``currency``, ``available``, ``shop``,
-    ``rating_*``, ``mpn``, ``category``), so code can read either source; only
-    ``avg_price``, ``manufacturer`` and ``listed_since`` are missing, because
-    the category feed does not carry them. Unlike the search facet, the
-    ``price_range`` returned here is the category's real one.
+    Hits have the fields of ``search_geizhals`` hits except ``avg_price``,
+    ``manufacturer`` and ``listed_since``. ``price_range`` is the category's
+    real one.
 
     Args:
-        category: The category code from ``list_categories`` or a search hit's
-            ``category_code`` / ``facets.categories``.
-        loc: Country site for pricing, "at" (default) or "de".
-        hloc: Which shop countries' offers to include; defaults to ``[loc]``,
-            ``["at", "de"]`` takes both.
-        lang: Display language for names/labels, "en" (default) or "de".
+        category: Category code, e.g. "gra16_512" for graphics cards.
         sort: "t" (relevance, default), "p" (cheapest first), "-p" (dearest
             first), "n" (newest listings) or "bew" (best rated).
-        price_min / price_max: Optional best-price bounds to filter to.
-        rows: Max results to return (page size), at most 50. Default 20.
-        offset: Paging offset into the result set. Default 0.
+        price_min / price_max: Optional bounds on the best price.
+        rows: Results per page, at most 50. Default 20.
+        offset: Paging offset. Default 0.
     """
     rows = _cap(rows, "rows")
     if price_min is not None and price_max is not None and price_min > price_max:
@@ -925,27 +885,13 @@ async def browse_category(category: str, *, loc: Country = "at",
 
 @_tool
 async def compare_products(product_ids: list[int], *, loc: Country = "at") -> dict:
-    """Compare several products side by side, e.g. to help the user pick
-    between a shortlist of alternatives. Returns ``{products: [...]}`` where
-    each product has its name, manufacturer, best price, rating and a
-    ``specs`` map (property -> value) with the HTML Geizhals embeds stripped
-    out and dates normalized to ISO. Geizhals unions the property list across
-    everything being compared, so properties that do not apply to a product
-    (a pump's "Förderhöhe" on a printhead) are dropped from its ``specs``
-    rather than left as an empty string that reads like missing data. Spec
-    labels and values are German, Geizhals has no English spec sheet.
-
-    Pricing missing from the comparison response is backfilled from
-    ``products_details``. ``available`` is false when a product genuinely has
-    no current offers (discontinued or temporarily unlisted), so a missing price
-    is distinguishable from a lookup failure -- for those, ``last_known_price``
-    and ``last_known_date`` are filled in from the price history so an EOL
-    product can still be compared against a used-market price.
+    """Compare products side by side. Each one gets a ``specs`` map with
+    German labels and values, HTML stripped and dates as ISO; specs that do
+    not apply to a product are left out instead of showing up empty. A product
+    without live offers gets ``last_known_price`` and ``last_known_date``.
 
     Args:
-        product_ids: The Geizhals product ids (``gzhid``) to compare, at most
-            10; pass two or more for a meaningful side-by-side.
-        loc: Country site for pricing, "at" (default) or "de".
+        product_ids: 1 to 10 Geizhals product ids.
     """
     if not 1 <= len(product_ids) <= MAX_COMPARE:
         raise ToolError(f"Pass 1 to {MAX_COMPARE} product ids (got {len(product_ids)}); "
@@ -958,8 +904,8 @@ async def compare_products(product_ids: list[int], *, loc: Country = "at") -> di
     price_map: dict = {}
     try:
         details = (await _post("products_details",
-                               {"id": product_ids, "params": _params(loc, None,
-                                                             images=1, availability=1)})).get("response") or {}
+                               {"id": product_ids, "params": _params(loc, None, images=1, availability=1)})
+                   ).get("response") or {}
         # products_details keys its response by product id.
         entries = details.values() if isinstance(details, dict) else details
         for d in entries:
@@ -1005,39 +951,20 @@ async def get_deals(
     max_price: Optional[float] = None,
     limit: int = 20,
 ) -> dict:
-    """Current Geizhals price drops ("Schnaeppchen" / Bestpreis-Entwicklung):
-    products whose best price just fell, and by how much. Use this for "what's
-    on sale / biggest discounts right now" questions rather than searching for
-    a specific product.
+    """Current price drops, for "what's on sale right now". Each deal has
+    ``change_percent`` (negative means cheaper), ``change_amount``,
+    ``old_price``, ``best_price`` and the ``alltime_best`` / ``top_deal`` flags.
 
-    Returns ``{count, deals: [...]}``. Each deal carries ``change_percent``
-    (negative = cheaper, e.g. -10.0) and ``change_amount`` next to the
-    ``old_price`` / ``best_price``, plus ``alltime_best`` and ``top_deal``
-    flags.
-
-    ``limit`` is a target number of *matching* deals, not a fetch size: a large
-    pool is always fetched and filtered/sorted locally, so a filter no longer
-    shrinks the result below ``limit`` while matches remain. ``scanned`` says
-    how many deals that pool held and ``top_deal_count`` how many of them
-    Geizhals flagged as a top deal -- with ``sort="top"`` and
-    ``top_deal_count: 0`` there simply were none, which is not the same as the
-    sort having no effect.
+    Geizhals hands out one pool of up to 300 drops, which is filtered and
+    sorted here. ``scanned`` is the pool size, ``matched`` how many passed the
+    filters and ``top_deal_count`` how many in the pool are top deals.
 
     Args:
-        sort: How to order the deals -- "percent" (biggest % drop, default),
-            "price" (cheapest best_price), "latest" (most recently changed),
-            "popularity" (most popular products first) or "top" (Geizhals'
-            top_deal flag first, biggest drop within that).
-        loc: Country site for pricing, "at" (default) or "de".
-        hloc: Which shop countries' offers to include; defaults to ``[loc]``,
-            ``["at", "de"]`` takes both.
-        lang: Display language for names/labels, "en" (default) or "de".
-        min_discount_percent: Only keep deals that dropped at least this many
-            percent, e.g. 15 for "-15% or better". Omit for no floor.
-        max_price: Only keep deals whose current ``best_price`` is at or below
-            this. Omit for no cap.
-        limit: Target number of matching deals to return, at most 50.
-            Default 20.
+        sort: "percent" (biggest drop, default), "price" (cheapest),
+            "latest", "popularity" or "top" (top deals first).
+        min_discount_percent: Keep drops of at least this many percent.
+        max_price: Keep deals with a ``best_price`` of at most this.
+        limit: Deals to return, at most 50. Default 20.
     """
     limit = _cap(limit, "limit")
     params = _params(loc, hloc, lang=lang, limit=max(limit, DEALS_POOL), price_range=1)
@@ -1208,41 +1135,24 @@ async def get_model_price_range(
     hloc: Optional[list[Country]] = None,
     max_variants: int = 300,
 ) -> dict:
-    """What a *model* costs right now across all its board partner / vendor
-    variants -- "what does an RTX 5070 go for", not "what does the Zotac Twin
-    Edge OC go for". This is the number you want when pricing a used item
-    against the new market; doing it by hand would mean a search, picking the
-    variants out yourself and a ``compare_products`` call.
+    """What a model costs right now across all its variants ("RTX 5070",
+    not one board partner's card): ``min``, ``median``, ``max`` and the five
+    ``cheapest`` with their ids. This is the new-price reference for a used
+    item.
 
-    Returns ``{min, median, max, variants, cheapest: [...]}`` over every listed
-    variant whose name contains all of the ``model`` words. ``min`` is the
-    cheapest live offer for the model and ``cheapest`` lists the five cheapest
-    with their ids, so you can go straight into ``get_product`` /
-    ``get_price_history`` from here. ``considered`` is how many search hits were
-    examined and ``total_hits`` how many the query has in total; when
-    ``considered`` reaches ``max_variants`` the numbers only cover the most
-    relevant ``max_variants`` hits.
-
-    The result is always scoped to one category, because an unscoped search for
-    a pricey product is dominated by things that are not it -- cases, water
-    blocks and mounts below it, prebuilt systems and notebooks above -- and
-    averaging those in would understate the model by an order of magnitude.
-    Pass ``category`` when you know it; otherwise it is detected from the search
-    and reported back as ``category_code`` with a ``note``, so check that field
-    before trusting the numbers.
+    The numbers come from one category, because accessories and prebuilt
+    systems that borrow the model's name would skew them badly. Without a
+    ``category`` it is detected and returned as ``category_code`` with a
+    ``note``, so check it. ``considered`` is how many hits were looked at and
+    ``total_hits`` how many exist.
 
     Args:
-        model: The model as people write it, e.g. "RTX 5070", "iPhone 15 Pro"
-            or "Ryzen 7 7800X3D". All words must appear in a variant's name, so
-            keep it to the model itself and leave vendor/edition words out.
-        category: Category code to scope to (from ``list_categories`` or a
-            search hit's ``category_code``). Omit to have it detected; passing
-            it explicitly is one request cheaper and removes the guess.
-        loc: Country site for pricing, "at" (default) or "de".
-        hloc: Which shop countries' offers to include; defaults to ``[loc]``,
-            ``["at", "de"]`` takes both.
-        max_variants: How many search hits to consider, most relevant first.
-            Default 300, which is also the maximum.
+        model: The model as people write it, e.g. "RTX 5070" or "iPhone 15
+            Pro". Every word must appear in a variant's name, so leave vendor
+            and edition words out.
+        category: Category code to scope to; saves a request and the guess.
+        max_variants: Hits to consider, most relevant first. Default and
+            maximum 300.
     """
     max_variants = max(1, min(int(max_variants), 300))
     site = _site(loc)
@@ -1303,31 +1213,20 @@ async def match_geizhals(
     hloc: Optional[list[Country]] = None,
     limit: int = 5,
 ) -> dict:
-    """Resolve a free-form listing title -- a willhaben/eBay/classifieds ad
-    headline, with all its noise -- to the Geizhals products it could be, each
-    with a confidence score. Use it as the bridge between a used listing and
-    its new price instead of hand-crafting a search query and eyeballing which
-    variant is the right one.
+    """Resolve a classifieds ad title (willhaben, eBay and the like) to the
+    Geizhals products it could be. Condition, packaging and sales words are
+    dropped first.
 
-    Returns ``{query, candidates: [...]}`` sorted by ``confidence`` (0-1, a
-    token-overlap heuristic, not a promise): roughly, >=0.8 is a safe match,
-    0.5-0.8 needs a look at the name, below that treat it as a guess. Number
-    and variant-marker mismatches ("4070" vs "4070 Ti") are scored down hard,
-    because those are different products rather than near misses. Each
-    candidate carries the live ``best_price`` / ``offer_count`` / ``available``,
-    so a match is usually the last call you need.
+    Candidates are sorted by ``confidence``, a 0-1 token-overlap heuristic:
+    0.8 and up is a safe match, 0.5 to 0.8 needs a look at the name, anything
+    lower is a guess. Model-number and variant mismatches ("4070" vs "4070
+    Ti") and marketplace listings without a category score low. A ``note``
+    says when the top candidates are too close to tell apart.
 
     Args:
-        title: The listing title as written, e.g. "Gigabyte RTX 5070 Windforce
-            OC 12GB NEU OVP mit Rechnung". Condition, packaging and price words
-            are stripped out for you.
-        category: Optional Geizhals category code to scope to (from
-            ``list_categories``) -- worth passing when you know the product
-            type, it removes most of the wrong-category candidates.
-        loc: Country site for pricing, "at" (default) or "de".
-        hloc: Which shop countries' offers to include; defaults to ``[loc]``,
-            ``["at", "de"]`` takes both.
-        limit: Max candidates to return, at most 50. Default 5.
+        title: The ad title as written.
+        category: Category code to scope to; removes most wrong candidates.
+        limit: Candidates to return, at most 50. Default 5.
     """
     limit = _cap(limit, "limit")
     tokens = _title_tokens(title)
@@ -1368,26 +1267,14 @@ async def match_geizhals(
 
 @_tool
 async def list_categories(query: Optional[str] = None, limit: int = 40) -> dict:
-    """Look up category codes by name, for use with ``browse_category`` (and
-    the ``category`` filter of ``search_geizhals``). Call this first whenever
-    you need a category code and don't already have one from a search's
-    facets -- don't guess codes.
-
-    Returns ``{count, categories: [{code, name, name_de, path}]}``. ``path``
-    shows where the category sits in the tree (e.g. "Hardware / Graphics Cards
-    / PCIe"). The query matches either English or German names, so both
-    "graphics cards" and "grafikkarten" work; ``name`` is English and
-    ``name_de`` German. Each browseable ``code`` appears once: Geizhals models
-    sub-filters (e.g. "Apple macOS" under Notebooks) as the same ``code`` plus
-    an internal filter, so those refinements are collapsed into their parent
-    category here.
+    """Look up category codes by name, for ``browse_category`` and the
+    ``category`` filter of ``search_geizhals``. Matches English and German
+    names ("graphics cards", "grafikkarten") anywhere in the category path and
+    returns ``{count, categories: [{code, name, name_de, path}]}``.
 
     Args:
-        query: Optional case/diacritic-insensitive substring matched against
-            the whole category path in English and German, e.g. "graphics",
-            "grafikkarten" or "waschmaschine". Omit to list all categories, up
-            to ``limit``.
-        limit: Max number of categories to return, at most 50. Default 40.
+        query: Case- and accent-insensitive substring. Omit to list all.
+        limit: At most 50. Default 40.
     """
     limit = _cap(limit, "limit")
     flat: list = []
