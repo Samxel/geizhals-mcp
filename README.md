@@ -147,7 +147,8 @@ The tools that take them share three parameters: `loc` is the country site,
 defaults to `[loc]`; `lang` (`"en"` or `"de"`) sets the language of category
 names. Results come as compact JSON, and fields without a value are left out.
 
-**`search_geizhals(query, ...)`**
+<details>
+<summary><code>search_geizhals(query, ...)</code>: products by keyword, with live prices</summary>
 
 Search products by keyword, with filters for category and manufacturer, sorting
 and paging (`rows` up to 50). Every hit carries its current `best_price`,
@@ -163,7 +164,10 @@ Geizhals has no newest or rating order for a search. A price sort narrows the
 result set as well as ordering it: Geizhals cannot price-order a product that
 has no price, so unavailable products leave both `results` and `total`.
 
-**`get_product(product_id, n_offers=5)`**
+</details>
+
+<details>
+<summary><code>get_product(product_id, n_offers=5)</code>: one product in full, with its cheapest shops</summary>
 
 Full detail of one product: current best price and offer count, name, category,
 rating, images, GTIN, offer link, all-time price range and test-review count.
@@ -171,18 +175,27 @@ rating, images, GTIN, offer link, all-time price range and test-review count.
 shop's own stock text and its rating. A product with no live offers gets its
 `last_known_price` / `last_known_date` filled in.
 
-**`get_price_history(product_id, days=31)`**
+</details>
+
+<details>
+<summary><code>get_price_history(product_id, days=31)</code>: how the price moved</summary>
 
 Window (`window_min/max/avg/change_percent`) and all-time (`alltime_min/max`)
 summaries kept strictly apart, plus a `[iso_date, price]` series that only
 lists the days the price changed. `granularity="day"` or `"week"` give a point
 per day or per week instead, and `include_series=False` leaves the series out.
 
-**`get_product_ratings(product_id)`**
+</details>
+
+<details>
+<summary><code>get_product_ratings(product_id)</code>: user ratings</summary>
 
 Average rating, totals, per-star counts and the reviews link.
 
-**`browse_category(category, ...)`**
+</details>
+
+<details>
+<summary><code>browse_category(category, ...)</code>: the products of one category</summary>
 
 List the products in a category by its code, with price bounds, paging (`rows`
 up to 50) and sorting: `"t"` (relevance), `"p"` / `"-p"` (price up or down),
@@ -190,14 +203,20 @@ up to 50) and sorting: `"t"` (relevance), `"p"` / `"-p"` (price up or down),
 as `search_geizhals`, and the `price_range` returned alongside them is the
 category's real one (the search facet's is not).
 
-**`compare_products(product_ids)`**
+</details>
+
+<details>
+<summary><code>compare_products(product_ids)</code>: products side by side, with specs</summary>
 
 Compare up to ten products side by side, specs included. Properties that don't
 apply to a product are dropped rather than shown as empty, and the specs are in
 German because that is all Geizhals has. Discontinued products carry their
 last known price.
 
-**`get_deals(sort="percent", ...)`**
+</details>
+
+<details>
+<summary><code>get_deals(sort="percent", ...)</code>: current price drops</summary>
 
 Current price drops: products whose best price just fell, with the percent and
 amount off and a link to the product page. Sort by biggest `percent` drop,
@@ -207,7 +226,10 @@ current drop (about a thousand), and `limit` (up to 50) is how many matches come
 back. `next_offset` pages on through the rest; the feed is kept for two minutes,
 so the next page answers at once.
 
-**`get_model_price_range(model, ...)`**
+</details>
+
+<details>
+<summary><code>get_model_price_range(model, ...)</code>: what a model costs across its variants</summary>
 
 What a whole model costs right now across all its variants (`min`, `median`,
 `max` and the five cheapest) instead of one specific board partner card.
@@ -217,7 +239,10 @@ cases and water blocks below it and prebuilt systems above it, so the category
 is detected when you don't pass one and reported back as `category_code`. Up to
 300 search hits are considered.
 
-**`match_geizhals(title, ...)`**
+</details>
+
+<details>
+<summary><code>match_geizhals(title, ...)</code>: a classifieds ad title to Geizhals products</summary>
 
 Resolve a free-form listing title ("Gigabyte RTX 5070 Windforce OC 12GB NEU OVP
 mit Rechnung") to Geizhals products, each with a 0–1 `confidence` and its live
@@ -226,18 +251,28 @@ the card they contain) score low, so they don't pass for the card itself. When
 the top candidates are too close to separate, or nothing scores convincingly,
 a `note` says so rather than letting a coin-flip look like an answer.
 
-**`list_categories(query)`**
+</details>
+
+<details>
+<summary><code>list_categories(query)</code>: category codes by name</summary>
 
 Browse Geizhals' category tree to find the category codes `browse_category`
 takes. Matches English or German names ("graphics cards" and "grafikkarten"
 both work). The full tree ships with the server in `data/categories.json`.
 
+</details>
+
 ### Prompt
 
-**`check_listing(title, price)`** turns a second-hand ad into a ready request:
-match it with `match_geizhals`, price the model new with
-`get_model_price_range`, and answer how far below the cheapest new offer the
-ad is. Clients that support prompts show it as "Check a second-hand listing".
+<details>
+<summary><code>check_listing(title, price)</code>: is a second-hand offer a good deal?</summary>
+
+Turns a second-hand ad into a ready request: match it with `match_geizhals`,
+price the model new with `get_model_price_range`, and answer how far below the
+cheapest new offer the ad is. Clients that support prompts show it as "Check a
+second-hand listing".
+
+</details>
 
 ## Notes
 
