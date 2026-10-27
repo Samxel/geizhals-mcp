@@ -726,6 +726,17 @@ async def get_product(product_id: int, *, loc: Country = "at",
     return product
 
 
+def _changes(points: list) -> list:
+    """Keep only the points where the price moved, plus the last one. Prices sit
+    still for days at a time, so a flat month is two points instead of 31 and
+    the series still redraws exactly: each price holds until the next point."""
+    out: list = []
+    for i, (date, price) in enumerate(points):
+        if not out or price != out[-1][1] or i == len(points) - 1:
+            out.append([date, price])
+    return out
+
+
 def _weekly(points: list) -> list:
     """Downsample a daily series to one point per ISO week (the week's last)."""
     by_week: dict = {}
@@ -737,7 +748,7 @@ def _weekly(points: list) -> list:
 @_tool
 async def get_price_history(product_id: int, *, days: int = 31,
                             loc: Country = "at", include_series: bool = True,
-                            granularity: Literal["day", "week"] = "day") -> dict:
+                            granularity: Literal["change", "day", "week"] = "change") -> dict:
     """Price history for a product, to answer "has this gotten cheaper / should
     I wait" type questions, and to price a product that is no longer on sale.
 
@@ -746,13 +757,13 @@ async def get_price_history(product_id: int, *, days: int = 31,
     describe the requested window only, while ``alltime_min`` / ``alltime_max``
     / ``alltime_first_date`` / ``alltime_last_date`` cover the product's whole
     listed history. For an unavailable (discontinued or unlisted) product
-    ``last_price`` plus
-    ``days_since_last_price`` tell you how stale the last data point is -- a
-    large number there means the price is historical, not current.
+    ``last_price`` plus ``days_since_last_price`` tell you how stale the last
+    data point is; a large number there means the price is historical, not
+    current.
 
-    A full daily ``series`` is a few thousand tokens; if you only need the
-    summary, pass ``include_series=False``, and prefer
-    ``granularity="week"`` for long windows.
+    The ``series`` only lists the days the price changed (plus the last day), so
+    a quiet year stays short. Pass ``include_series=False`` if the summary is
+    all you need.
 
     Args:
         product_id: The Geizhals product id (``gzhid``).
@@ -764,8 +775,8 @@ async def get_price_history(product_id: int, *, days: int = 31,
             ``[iso_date, price]`` pairs. Default True; set False for just the
             summary. ``points`` counts the daily observations in the window
             regardless, so it stays comparable across both settings.
-        granularity: "day" (default, one point per day) or "week" (one point
-            per ISO week, the week's last price).
+        granularity: "change" (default, a point whenever the price moved),
+            "day" (every day) or "week" (each ISO week's last price).
     """
     window = min(HISTORY_WINDOWS, key=lambda w: abs(w - days))
     payload = {"id": product_id, "params": {"days": window, "loc": loc, "hloc": []}}
@@ -810,7 +821,7 @@ async def get_price_history(product_id: int, *, days: int = 31,
         "alltime_last_date": _iso_date(meta.get("last_ts")),
     }
     if include_series:
-        result["series"] = _weekly(points) if granularity == "week" else points
+        result["series"] = {"change": _changes, "day": list, "week": _weekly}[granularity](points)
     return result
 
 
