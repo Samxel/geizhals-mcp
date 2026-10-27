@@ -244,6 +244,7 @@ def _page_size(rows: int) -> int:
 # ~120k tokens. Larger asks are clamped; `offset` pages through the rest.
 MAX_ROWS = 50
 MAX_COMPARE = 10
+MAX_OFFERS = 20
 
 
 def _cap(value: int, name: str) -> int:
@@ -470,6 +471,32 @@ def _summarize_product(p: dict, site: str = "geizhals.at") -> dict:
         "images": _image_urls(p.get("images")),
         "offers_url": f"https://{site}{urls.get('offers')}" if urls.get("offers") else None,
         "test_reviews": len(p.get("test_reviews") or []),
+        "gtin": p.get("gtin") or None,
+    }
+
+
+def _summarize_offer(o: dict, loc: str) -> dict:
+    """One shop's offer: price, cheapest shipping to `loc` and what the shop says
+    about stock. Shipping is listed per payment method, and a negative value
+    there is a prepayment discount rather than a shipping cost, so those are
+    skipped; a shop with no shipping entry only sells for pickup."""
+    shop = o.get("shop") or {}
+    price = _to_float((o.get("price") or {}).get("value"))
+    methods = ((shop.get("shipping") or {}).get(loc) or {}).values()
+    costs = [_to_float(m.get("shipping_price")) for m in methods if isinstance(m, dict)]
+    costs = [c for c in costs if c is not None and c >= 0]
+    shipping = min(costs) if costs else None
+    stock = (((o.get("avl") or {}).get("descr") or [{}])[0] or {}).get("text") or ""
+    rating = shop.get("rating") or {}
+    return {
+        "shop": shop.get("merchant_name") or shop.get("name"),
+        "price": price,
+        "shipping": shipping,
+        "total": round(price + shipping, 2) if price is not None and shipping is not None else None,
+        # the first line is the mail-order stock; the rest lists pickup branches
+        "availability": stock.splitlines()[0] if stock else None,
+        "shop_rating": round(rating["rating"], 1) if isinstance(rating.get("rating"), (int, float)) else None,
+        "shop_rating_count": rating.get("count"),
     }
 
 
@@ -684,17 +711,23 @@ async def _last_known_price(product_id: int, loc: str) -> dict:
 @_tool
 async def get_product(product_id: int, *, loc: Country = "at",
                       hloc: Optional[list[Country]] = None,
-                      lang: Literal["en", "de"] = "en", n_offers: int = 20) -> dict:
+                      lang: Literal["en", "de"] = "en", n_offers: int = 5) -> dict:
     """Full detail of one product: live ``best_price``, ``offer_count``,
-    cheapest ``shop``, rating, images, ``variant_count``, the number of test
-    reviews and the all-time price range (``alltime_*``, not today's price).
+    cheapest ``shop``, rating, images, ``gtin``, ``variant_count``, the number of
+    test reviews and the all-time price range (``alltime_*``, not today's price).
     Without live offers it adds ``last_known_price``, ``last_known_date`` and
     ``days_since_last_price``.
 
+    ``offers`` lists the cheapest shops with ``price``, ``shipping`` (cheapest
+    method, left out for pickup-only shops), ``total``, the shop's own
+    ``availability`` text and its ``shop_rating`` out of 5. Sorting by
+    ``total`` can change the winner.
+
     Args:
         product_id: The Geizhals product id, e.g. a search hit's ``id``.
-        n_offers: How many shop offers to fetch. Default 20.
+        n_offers: Shop offers to list, cheapest first, at most 20. Default 5.
     """
+    n_offers = min(_cap(n_offers, "n_offers"), MAX_OFFERS)
     payload = {
         "query": str(product_id),
         "type": "id",
@@ -706,6 +739,8 @@ async def get_product(product_id: int, *, loc: Country = "at",
     if not response:
         raise ToolError(f"No product with id {product_id}.")
     product = _summarize_product(response[0], _site(loc))
+    product["offers"] = [_summarize_offer(o, loc) for o in (response[0].get("offers") or [])[:n_offers]
+                         if isinstance(o, dict)]
     if not product["available"]:
         product.update(await _last_known_price(product_id, loc))
     return product

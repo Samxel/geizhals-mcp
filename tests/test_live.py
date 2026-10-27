@@ -37,6 +37,10 @@ async def test_search_is_signed_and_priced(call):
 async def test_product_history_and_ratings(call):
     product = await call("get_product", product_id=PRODUCT_ID)
     assert product["name"].startswith("AMD Ryzen 7 7800X3D")
+    assert product["gtin"]
+    offers = product["offers"]
+    assert len(offers) == 5 and offers[0]["price"] == product["best_price"]
+    assert all(o["shop"] and o["availability"] for o in offers)
     history = await call("get_price_history", product_id=PRODUCT_ID, include_series=False)
     assert history["points"] > 0
     ratings = await call("get_product_ratings", product_id=PRODUCT_ID)
