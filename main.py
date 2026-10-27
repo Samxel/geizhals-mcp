@@ -1045,12 +1045,20 @@ _AD_NOISE = {
     "zustand", "wenig", "kaum", "benutzt", "genutzt", "gunstig", "verkaufe", "verkauf",
     "biete", "inkl", "und", "mit", "fur", "der", "die", "das", "eur", "euro", "stk",
     "neuwertiger", "top", "voll", "funktionsfahig", "originalverpackung",
+    "ich", "mein", "meine", "meinen", "zu", "von", "nur", "privat", "privatverkauf",
+    "tausch", "inklusive", "ungeoffnet", "versiegelt", "neupreis", "kaufbeleg",
 }
 
 # Tokens that separate one model from its sibling. A candidate that carries one
 # the query does not (or the other way round) is a different product, not a
 # near miss -- "4070" vs "4070 Ti" vs "4070 Super".
 _VARIANT_TOKENS = {"ti", "super", "xt", "xtx", "pro", "max", "plus", "ultra", "mini", "le"}
+
+# An uncategorised hit is one shop's marketplace feed, not a Geizhals product
+# page: mostly prebuilt PCs and bundles whose long names spell out the very card
+# or phone being matched, so they cover every query word and would otherwise
+# score like the product itself.
+_UNCATEGORISED_FACTOR = 0.6
 
 
 def _title_tokens(text: str) -> list[str]:
@@ -1150,7 +1158,7 @@ async def get_model_price_range(
     category: Optional[str] = None,
     loc: Country = "at",
     hloc: Optional[list[Country]] = None,
-    max_variants: int = 100,
+    max_variants: int = 300,
 ) -> dict:
     """What a *model* costs right now across all its board partner / vendor
     variants -- "what does an RTX 5070 go for", not "what does the Zotac Twin
@@ -1164,8 +1172,8 @@ async def get_model_price_range(
     with their ids, so you can go straight into ``get_product`` /
     ``get_price_history`` from here. ``considered`` is how many search hits were
     examined and ``total_hits`` how many the query has in total; when
-    ``considered`` reaches ``max_variants`` the ``max`` and ``median`` describe
-    the cheapest ``max_variants`` only.
+    ``considered`` reaches ``max_variants`` the numbers only cover the most
+    relevant ``max_variants`` hits.
 
     The result is always scoped to one category, because an unscoped search for
     a pricey product is dominated by things that are not it -- cases, water
@@ -1186,9 +1194,9 @@ async def get_model_price_range(
         hloc: Which shop countries' offers to include; defaults to ``[loc]``,
             ``["at", "de"]`` takes both.
         max_variants: How many search hits to consider, most relevant first.
-            Default 100, which is also the maximum.
+            Default 300, which is also the maximum.
     """
-    max_variants = max(1, min(int(max_variants), 100))
+    max_variants = max(1, min(int(max_variants), 300))
     site = _site(loc)
     wanted = set(_title_tokens(model))
     if not wanted:
@@ -1291,6 +1299,8 @@ async def match_geizhals(
     candidates = []
     for hit in (_summarize_search_hit(p, site) for p in products):
         score = _match_score(wanted, hit["name"] or "")
+        if not hit["category_code"]:
+            score = round(score * _UNCATEGORISED_FACTOR, 3)
         if score:
             candidates.append({"confidence": score, **hit})
     candidates.sort(key=lambda c: (-c["confidence"], c["best_price"] is None))

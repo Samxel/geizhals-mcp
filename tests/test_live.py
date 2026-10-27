@@ -85,3 +85,10 @@ async def test_model_price_range_and_matching(call):
     assert model["min"]
     match = await call("match_geizhals", title="AMD Ryzen 7 7800X3D tray NEU OVP")
     assert match["candidates"][0]["confidence"] > 0.8
+
+
+async def test_marketplace_prebuilts_score_below_a_safe_match(call):
+    match = await call("match_geizhals", title="Gigabyte RTX 5070 Windforce OC 12GB NEU OVP mit Rechnung",
+                       limit=20)
+    assert match["candidates"][0]["category_code"] == "gra16_512"
+    assert all(c["confidence"] < 0.8 for c in match["candidates"] if not c["category_code"])
