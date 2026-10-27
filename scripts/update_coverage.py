@@ -37,8 +37,11 @@ def fetch_counts() -> dict[str, int]:
         body = response.read()
     if body[:2] == b"\x1f\x8b":
         body = gzip.decompress(body)
-    page = body.decode("utf-8", "replace")
+    return parse_counts(body.decode("utf-8", "replace"))
 
+
+def parse_counts(page: str) -> dict[str, int]:
+    """The counts from the homepage's "Zahlen & Fakten" block."""
     pairs = re.findall(
         r'facts__value">([\d.]+)</span>\s*<span class="facts__label">(.*?)</span>',
         page,

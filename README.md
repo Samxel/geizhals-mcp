@@ -6,9 +6,9 @@ It wraps the Geizhals mobile app's API (`api.geizhals.net/gh/v9`) and returns th
 important fields to the AI.
 
 <p align="center">
-  <a href="https://geizhals.at/"><img alt="Products tracked" src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FSamxel%2Fgeizhals-mcp%2Fmain%2Fcoverage.json&query=%24.products&label=products&color=green&suffix=%20tracked&cacheSeconds=3600"></a>
-  <a href="https://geizhals.at/"><img alt="Prices compared" src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FSamxel%2Fgeizhals-mcp%2Fmain%2Fcoverage.json&query=%24.prices&label=prices&color=ff7300&suffix=%20compared&cacheSeconds=3600"></a>
-  <a href="https://geizhals.at/"><img alt="Merchants" src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FSamxel%2Fgeizhals-mcp%2Fmain%2Fcoverage.json&query=%24.merchants&label=merchants&color=1e6fff&suffix=%20shops&cacheSeconds=3600"></a>
+  <a href="https://geizhals.at/"><img alt="Products tracked" src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FSamxel%2Fgeizhals-mcp%2Fcoverage%2Fcoverage.json&query=%24.products&label=products&color=green&suffix=%20tracked&cacheSeconds=3600"></a>
+  <a href="https://geizhals.at/"><img alt="Prices compared" src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FSamxel%2Fgeizhals-mcp%2Fcoverage%2Fcoverage.json&query=%24.prices&label=prices&color=ff7300&suffix=%20compared&cacheSeconds=3600"></a>
+  <a href="https://geizhals.at/"><img alt="Merchants" src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FSamxel%2Fgeizhals-mcp%2Fcoverage%2Fcoverage.json&query=%24.merchants&label=merchants&color=1e6fff&suffix=%20shops&cacheSeconds=3600"></a>
 </p>
 
 <p align="center">
@@ -207,9 +207,10 @@ both work). The full tree ships with the server in `data/categories.json`.
 - `data/categories.json` is a snapshot of Geizhals' category tree (title,
   title_de, id, children). `main.py` loads it for `list_categories`, which
   matches queries against both the English and German names.
-- `coverage.json` holds the catalogue counts shown in the badges above.
-  `scripts/update_coverage.py` refreshes it from the Geizhals homepage and a
-  daily GitHub Action commits any change.
+- The badges above read `coverage.json` from the `coverage` branch.
+  `scripts/update_coverage.py` refreshes it from the Geizhals homepage, and a
+  daily GitHub Action commits any change to that branch, so the refresh stays
+  out of `main`'s history.
 - API details are documented in [`search_api.md`](search_api.md).
 - This uses Geizhals' internal mobile API, not an official one. Be nice to it.
 

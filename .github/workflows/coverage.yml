@@ -2,6 +2,13 @@ name: coverage
 on:
   schedule:
     - cron: "0 4 * * *"
+  # run once right after this file or the script changes, so the badges never
+  # wait a day for a first coverage branch
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/coverage.yml
+      - scripts/update_coverage.py
   workflow_dispatch:
 
 concurrency:
@@ -24,12 +31,20 @@ jobs:
       - name: Fetch live catalogue counts
         run: python scripts/update_coverage.py
 
-      - name: Commit and push coverage.json if it changed
+      # The counts live on their own branch, so refreshing them every day does
+      # not add a commit to main's history every day.
+      - name: Commit coverage.json to the coverage branch if it changed
         run: |
+          mv coverage.json "$RUNNER_TEMP/coverage.json"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git fetch --depth=1 origin coverage; then
+            git switch -C coverage FETCH_HEAD
+          else
+            git switch --orphan coverage
+          fi
+          cp "$RUNNER_TEMP/coverage.json" coverage.json
           git add coverage.json
           git diff --staged --quiet && exit 0
           git commit -m "chore: update coverage counts"
-          git pull --rebase origin main
-          git push
+          git push origin coverage
