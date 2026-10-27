@@ -1,5 +1,5 @@
 """Shared fixtures: an in-process MCP client and a fake Geizhals API standing in
-for ``main._post``, so the tools are exercised end to end without the network."""
+for ``geizhals.api.post``, so the tools are exercised end to end without the network."""
 
 import json
 import sys
@@ -9,6 +9,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import geizhals.api  # noqa: E402
 import main  # noqa: E402
 from mcp import Client  # noqa: E402
 
@@ -46,9 +47,9 @@ class FakeAPI:
 @pytest.fixture
 def api(monkeypatch):
     fake = FakeAPI()
-    monkeypatch.setattr(main, "_post", fake)
+    monkeypatch.setattr(geizhals.api, "post", fake)
     # a feed cached by an earlier test would hide this test's canned one
-    main._deals_cache.clear()
+    geizhals.api._deals_cache.clear()
     return fake
 
 

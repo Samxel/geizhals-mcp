@@ -2,7 +2,7 @@
 
 import pytest
 
-import main
+from geizhals import matching
 from samples import search_hit, search_response
 
 pytestmark = pytest.mark.anyio
@@ -25,7 +25,7 @@ async def test_marketplace_prebuilts_do_not_pass_as_the_card(api, call):
 
 
 def test_more_ad_prose_is_dropped():
-    tokens = main._title_tokens(
+    tokens = matching.title_tokens(
         "Verkaufe meine PS5 Slim Digital Edition 1TB wie neu inkl 2 Controller, nur Abholung")
     assert tokens == ["ps5", "slim", "digital", "edition", "1tb", "controller"]
 

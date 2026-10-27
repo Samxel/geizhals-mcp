@@ -34,9 +34,9 @@ payload {"token_id":"mobileapp-2026-android-3.12.7",
 
 `request_fingerprint` binds the token to the request: it is a `sha256` hex
 digest over a canonical string built from the method, host, query and body (see
-`request_fingerprint` in `main.py`), not a plain `sha256(body)`. The `HS256`
+`request_fingerprint` in `geizhals/api.py`), not a plain `sha256(body)`. The `HS256`
 secret is symmetric, so the app signs offline; it is reverse-engineered from the
-app's Flutter binary (`libapp.so`) and hardcoded in `main.py` as
+app's Flutter binary (`libapp.so`) and hardcoded in `geizhals/api.py` as
 `GH_HMAC_SECRET`. A wrong or missing token gives `403`, and because both the
 secret and the scheme are hardcoded they can drift whenever Geizhals rotates
 them.

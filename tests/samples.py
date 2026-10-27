@@ -1,4 +1,4 @@
-"""Canned Geizhals API responses, trimmed to the fields main.py reads but shaped
+"""Canned Geizhals API responses, trimmed to the fields the server reads but shaped
 like the live ones (see search_api.md), so the suite runs offline."""
 
 CATEGORY_LABELS = {

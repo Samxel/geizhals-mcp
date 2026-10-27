@@ -2,49 +2,28 @@
 # requires-python = ">=3.10"
 # dependencies = ["mcp>=2.3.0,<3", "httpx[http2]>=0.28.1"]
 # ///
+import argparse
+import asyncio
+import functools
+import inspect
+import json
+import logging
+import re
+from datetime import datetime, timezone
+from typing import Literal, Optional
+
 from mcp.server import MCPServer
 from mcp.server.caching import CacheHint
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
-import httpx
-import asyncio
-import json
-import re
-import time
-import hmac
-import hashlib
-import base64
-import html
-import unicodedata
-import urllib.parse
-import functools
-import argparse
-import inspect
-from datetime import datetime, timezone
-from pathlib import Path
-from typing import Optional, Literal
-import logging
 
-BASE_URL = "https://api.geizhals.net/gh/v9"
-IMAGE_HOST = "https://gzhls.at"
-
-# Host used in the request_fingerprint signing string. Constant across
-# /gh/v9, /usercontent/v0, etc. (only the oauth client uses a different host).
-API_HOST = "api.geizhals.net"
-
-GH_CLIENT = "Geizhals/3.13.1 (Android 14; sdk_gphone64_x86_64; emu64xa; x86_64; at)"
-
-# --- Request authentication ------------------------------------------------
-GH_TOKEN_ID = "mobileapp-2026-android-3.12.7"
-GH_AUTH_ROLE = "mobileapp-2026-android-3.12.7"
-GH_HMAC_SECRET = "2Uq.p2gD1z5Im,m73u5eSVzeuFZJpcQVtzx.M3OtyW.4LvzO"
+from geizhals import api, categories, matching, summaries
+from geizhals.api import CategorySort, Country, Sort
+from geizhals.categories import CATEGORY_PATH
 
 HOST = "127.0.0.1"
 PORT = 8000
 MCP_PATH = "/mcp"
-
-MAX_RETRIES = 2
-RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 
 # Sent once when a client connects, so what every tool shares is said here
 # instead of in each tool's description, which the model reads on every turn.
@@ -81,129 +60,9 @@ Fields without a value are left out of results.
 # protocol may keep it for a day instead of asking again on every connect.
 mcp = MCPServer("geizhals-mcp", instructions=INSTRUCTIONS,
                 cache_hints={"tools/list": CacheHint(ttl_ms=24 * 60 * 60 * 1000, scope="public")})
-client = httpx.AsyncClient(http2=True)
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s: %(message)s')
-
-# Country / market: Geizhals runs one API for several country sites. `loc` is the
-# pricing/site, `hloc` the shops to include. Only the Austrian and German sites
-# are offered: on the others the endpoints disagree on currency (search answers
-# in EUR labelled as PLN/GBP, the price history in PLN/GBP), sk answers every
-# call with a 400, and the at/de sites ignore any other shop country in `hloc`.
-Country = Literal["at", "de"]
-
-# Sort keys each endpoint actually honours (checked against the live API).
-# search_product silently ignores anything but relevance and price, so "n" and
-# "r" there would only look like they worked; categorylist rejects unknown keys
-# with a 400 and reads "r" as a price sort, its rating sort is "bew".
-Sort = Literal["", "p", "-p"]
-CategorySort = Literal["t", "p", "-p", "n", "bew"]
-
-
-# ---------------------------------------------------------------------------
-# Auth token
-# ---------------------------------------------------------------------------
-def _b64url(data: bytes) -> str:
-    return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
-
-
-def request_fingerprint(method: str, body_json_str: str = "", query_string: str = "") -> str:
-    """Canonical per-request fingerprint the JWT payload carries: a sha256 hex
-    digest over a signing string built from the method, host, query and body,
-    so the token only validates for this exact request."""
-    if method == "POST":
-        s = f"POST|{API_HOST}||{body_json_str}"
-    else:  # GET
-        s = f"{method}|{API_HOST}|{query_string}|"
-    return hashlib.sha256(s.encode("utf-8")).hexdigest()
-
-
-def _auth_header(body_bytes: bytes, method: str = "POST", query_string: str = "") -> str:
-    """Build the ``Bearer`` JWT the app sends: an HS256 token whose payload
-    carries a ``request_fingerprint`` that binds it to this exact request,
-    signed with ``GH_HMAC_SECRET``."""
-    now = int(time.time())
-
-    body_str = body_bytes.decode("utf-8")
-    fp = request_fingerprint(method, body_str, query_string)
-
-    header = {"alg": "HS256", "typ": "JWT"}
-    payload = {
-        "token_id": GH_TOKEN_ID,
-        "timestamp": now,
-        "request_fingerprint": fp,
-        "iat": now,
-    }
-
-    header_b64 = _b64url(json.dumps(header, separators=(",", ":")).encode())
-    payload_b64 = _b64url(json.dumps(payload, separators=(",", ":")).encode())
-
-    signing_input = f"{header_b64}.{payload_b64}"
-
-    signature = hmac.new(
-        GH_HMAC_SECRET.encode("utf-8"),
-        signing_input.encode("utf-8"),
-        hashlib.sha256
-    ).digest()
-
-    signature_b64 = _b64url(signature)
-
-    return f"Bearer {signing_input}.{signature_b64}"
-
-
-class UpstreamError(ToolError):
-    """An upstream Geizhals failure, already phrased for the caller. As a
-    ``ToolError`` it reaches the model as an ``is_error`` result carrying this
-    text; any other exception would only say "Error executing tool"."""
-
-    def __init__(self, message: str, status: Optional[int] = None):
-        super().__init__(message)
-        self.status = status
-
-
-async def _post(endpoint: str, payload: dict) -> dict:
-    """POST a signed request to a gh/v9 endpoint, retrying transient failures."""
-    body = json.dumps(payload, separators=(",", ":")).encode()
-    headers = {
-        "authorization": _auth_header(body),
-        "auth-role": GH_AUTH_ROLE,
-        "user-agent": GH_CLIENT,
-        "content-type": "application/json",
-        "accept-encoding": "gzip",
-    }
-    url = f"{BASE_URL}/{endpoint}"
-    for attempt in range(MAX_RETRIES + 1):
-        try:
-            response = await client.post(url, content=body, headers=headers)
-        except httpx.TransportError as exc:
-            if attempt == MAX_RETRIES:
-                raise UpstreamError(f"Could not reach Geizhals ({type(exc).__name__}).") from exc
-        else:
-            if response.status_code == 403:
-                raise UpstreamError(
-                    "Geizhals rejected the request signature (403) -- the app's "
-                    "signing credentials in main.py are most likely outdated.", 403
-                )
-            if response.status_code not in RETRYABLE_STATUS or attempt == MAX_RETRIES:
-                if response.status_code >= 500:
-                    # still failing after the retries: their side, not the arguments
-                    raise UpstreamError(
-                        f"Geizhals could not answer the '{endpoint}' request (HTTP "
-                        f"{response.status_code}); this is on their side, not the arguments.",
-                        response.status_code
-                    )
-                if response.status_code >= 400:
-                    raise UpstreamError(
-                        f"Geizhals rejected the '{endpoint}' request (HTTP "
-                        f"{response.status_code}); check the arguments you passed.",
-                        response.status_code
-                    )
-                return response.json()
-        delay = 0.5 * (2 ** attempt)
-        logger.warning("Request to '%s' failed (attempt %d/%d), retrying in %.1fs",
-                        url, attempt + 1, MAX_RETRIES + 1, delay)
-        await asyncio.sleep(delay)
 
 
 def _prune(value):
@@ -240,29 +99,6 @@ def _tool(fn=None, *, annotations: ToolAnnotations = ONLINE):
                     structured_output=False)(wrapper)
 
 
-def _params(loc: str, hloc: Optional[list[str]], *, lang: str = "en", **extra) -> dict:
-    """Common param block (loc = pricing site, hloc = shop countries, lang =
-    display language for names/labels)."""
-    p = {"loc": loc, "hloc": hloc or [loc], "lang": lang}
-    p.update({k: v for k, v in extra.items() if v is not None})
-    return p
-
-
-# Price history is only served for these fixed windows (1/3/6/12 months); any
-# other `days` value gives a 400, so requests are snapped to the nearest one.
-HISTORY_WINDOWS = (31, 91, 183, 365)
-
-# `pagesize` is validated server-side against this fixed set, so an arbitrary
-# row count gives a 400. Requests ask for the next size up and the extra rows
-# are trimmed off the response.
-PAGE_SIZES = (1, 5, 10, 30, 100, 300, 1000)
-
-
-def _page_size(rows: int) -> int:
-    """Smallest allowed `pagesize` that covers `rows`."""
-    return next((s for s in PAGE_SIZES if s >= rows), PAGE_SIZES[-1])
-
-
 # One call must not be able to flood the model's context -- a 500-row search is
 # ~120k tokens. Larger asks are clamped; `offset` pages through the rest.
 MAX_ROWS = 50
@@ -275,374 +111,6 @@ def _cap(value: int, name: str) -> int:
     if value < 1:
         raise ToolError(f"{name} must be at least 1 (got {value}).")
     return min(value, MAX_ROWS)
-
-
-def _leaf_cat(categories: Optional[list]) -> Optional[str]:
-    """The browseable `cat` code of the deepest category in a hit's category
-    path (the code `browse_category` / the `category` search filter take)."""
-    for c in reversed(categories or []):
-        idd = (c or {}).get("id") or {}
-        if isinstance(idd, dict) and idd.get("cat"):
-            return idd["cat"]
-    return None
-
-
-# ---------------------------------------------------------------------------
-# Categories (shipped tree, like the marketplace category tree)
-# ---------------------------------------------------------------------------
-def _fold(s: str) -> str:
-    """Lowercase and strip diacritics, so "Grafikkarte" and "GRAFIKKARTE" match."""
-    return unicodedata.normalize("NFKD", str(s)).encode("ascii", "ignore").decode().lower()
-
-
-def _norm(s: str) -> str:
-    return "".join(_fold(s).split())
-
-
-def _load_categories() -> list[dict]:
-    path = Path(__file__).parent / "data" / "categories.json"
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        logging.getLogger(__name__).warning("categories.json not found -- list_categories disabled")
-        return []
-
-
-_CATEGORIES = _load_categories()
-
-
-def _cat_code(node: dict) -> Optional[str]:
-    """The `cat` id is the code a category-listing request needs."""
-    idd = node.get("id") or {}
-    return idd.get("cat")
-
-
-def _walk_categories(nodes, trail, trail_de, out):
-    for nd in nodes:
-        label = nd.get("title") or ""
-        label_de = nd.get("title_de") or label
-        path = trail + [label]
-        path_de = trail_de + [label_de]
-        out.append((nd, " / ".join(path), " / ".join(path_de)))
-        _walk_categories(nd.get("childs", []), path, path_de, out)
-
-
-def _category_paths() -> dict[str, dict[str, list[str]]]:
-    """lang -> code -> label path. search_product ignores `lang` and always
-    labels at/de hits in German, so hits and facets are named from the shipped
-    tree instead, which also lets a category listing name its category the same
-    way a search hit does."""
-    flat: list = []
-    _walk_categories(_CATEGORIES, [], [], flat)
-    paths: dict[str, dict[str, list[str]]] = {"en": {}, "de": {}}
-    for node, path, path_de in flat:
-        code = _cat_code(node)
-        if code:
-            paths["en"].setdefault(code, path.split(" / "))
-            paths["de"].setdefault(code, path_de.split(" / "))
-    return paths
-
-
-_CATEGORY_PATH = _category_paths()
-
-
-# ---------------------------------------------------------------------------
-# Summaries
-# ---------------------------------------------------------------------------
-def _image_urls(images) -> list[str]:
-    out = []
-    for img in images or []:
-        if isinstance(img, str):
-            out.append(img if img.startswith("http") else f"{IMAGE_HOST}{img}")
-    return out
-
-
-def _to_float(value) -> Optional[float]:
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def _iso_date(ts) -> Optional[str]:
-    """Geizhals timestamp (seconds, or milliseconds in history series) -> ISO date."""
-    if not isinstance(ts, (int, float)):
-        return None
-    seconds = ts / 1000 if ts > 10 ** 11 else ts
-    try:
-        return datetime.fromtimestamp(seconds, timezone.utc).date().isoformat()
-    except (OverflowError, OSError, ValueError):
-        return None
-
-
-def _iso_minute(ts) -> Optional[str]:
-    """Unix seconds -> "2026-10-27T13:05Z". Sorts the same as the timestamp."""
-    if not isinstance(ts, (int, float)):
-        return None
-    return datetime.fromtimestamp(ts, timezone.utc).strftime("%Y-%m-%dT%H:%MZ")
-
-
-_DE_DATE_RE = re.compile(r"^(\d{2})\.(\d{2})\.(\d{4})$")
-
-
-def _clean_html(value):
-    """Strip the raw HTML Geizhals embeds in comparison spec values
-    (``<a href=...>``, ``<br>``, entities) down to plain text."""
-    if not isinstance(value, str):
-        return value
-    text = re.sub(r"<br\s*/?>", " / ", value, flags=re.IGNORECASE)
-    text = re.sub(r"<[^>]+>", "", text)
-    text = re.sub(r"\s+", " ", html.unescape(text)).strip()
-    # spec values carry dates as dd.mm.yyyy on one code path and ISO on another
-    match = _DE_DATE_RE.match(text)
-    return f"{match[3]}-{match[2]}-{match[1]}" if match else text
-
-
-def _site(loc: str) -> str:
-    """The country site the ids/links of a `loc` belong to. Both serve the same
-    catalogue, so an id from one is valid on the other."""
-    return {"at": "geizhals.at", "de": "geizhals.de"}.get(loc, "geizhals.at")
-
-
-def _best_shop(p: dict) -> Optional[str]:
-    for offer in p.get("offers") or []:
-        shop = (offer or {}).get("shop") or {}
-        # merchant_name is the shop's site name ("alza.at"), which is what
-        # search hits call it too; name is the company ("Alza.at GmbH")
-        name = shop.get("merchant_name") or shop.get("name")
-        if name:
-            return name
-    return None
-
-
-def _currency(p: dict) -> Optional[str]:
-    for offer in p.get("offers") or []:
-        currency = ((offer or {}).get("pricing") or {}).get("loc_currency")
-        if currency:
-            return currency
-    return None
-
-
-def _summarize_search_hit(p: dict, site: str = "geizhals.at", lang: str = "en") -> dict:
-    urls = p.get("urls") or {}
-    prices = p.get("prices") or {}
-    best_price = _to_float(prices.get("best"))
-    offer_count = p.get("offer_count")
-    available = bool(best_price is not None and (offer_count or 0) > 0)
-    hit = {
-        "id": p.get("gzhid"),
-        "variant_id": p.get("variant_id"),
-        "name": _clean_html(p.get("product") or p.get("product_for_sort")),
-        "manufacturer": p.get("manufacturer_name"),
-        # uncategorised hits (Amazon passthrough listings) carry category: null
-        "category": (_CATEGORY_PATH[lang].get(_leaf_cat(p.get("category")) or "")
-                     or [c.get("label") for c in (p.get("category") or []) if isinstance(c, dict)]),
-        "category_code": _leaf_cat(p.get("category")),
-        "best_price": best_price,
-        "avg_price": _to_float(prices.get("avg")),
-        "currency": _currency(p),
-        "offer_count": offer_count,
-        "available": available,
-        "shop": _best_shop(p),
-        "rating_stars": p.get("rating_stars"),
-        "rating_count": p.get("rating_count"),
-        "url": f"https://{site}{urls.get('overview')}" if urls.get("overview") else None,
-        "mpn": p.get("mpn"),
-        "listed_since": (p.get("listed_since") or "")[:10] or None,
-    }
-    # A product with no live offers would otherwise be nothing but nulls. The
-    # all-time extrema come with the search response, so give the EOL anchor
-    # here rather than making the caller fetch each hit individually.
-    bp = p.get("bestprices") or {}
-    if not available and bp:
-        hit.update({
-            "alltime_price_min": _to_float(bp.get("min")),
-            "alltime_price_max": _to_float(bp.get("max")),
-            "alltime_last_date": _iso_date(bp.get("last")),
-        })
-    return hit
-
-
-def _summarize_product(p: dict, site: str = "geizhals.at") -> dict:
-    urls = p.get("urls") or {}
-    bp = p.get("bestprices") or {}
-    prices = p.get("prices") or {}
-    best_price = _to_float(prices.get("best"))
-    offer_count = p.get("offer_count")
-    return {
-        "id": p.get("gzhid"),
-        "variant_id": p.get("variant_id"),
-        "name": _clean_html(p.get("product_for_sort") or p.get("product")),
-        "manufacturer": p.get("manufacturer_name"),
-        "category": [c.get("label") for c in (p.get("category") or []) if isinstance(c, dict)],
-        "category_code": _leaf_cat(p.get("category")),
-        "best_price": best_price,
-        "avg_price": _to_float(prices.get("avg")),
-        "offer_count": offer_count,
-        "available": bool(best_price is not None and (offer_count or 0) > 0),
-        "shop": _best_shop(p),
-        "listed_since": (p.get("listed_since") or "")[:10] or None,
-        "variant_count": p.get("variant_count"),
-        "rating_stars": p.get("rating_stars"),
-        "rating_count": p.get("rating_count"),
-        # bestprices is the observed range over the product's whole listed
-        # history, not the price on offer today.
-        "alltime_price_min": _to_float(bp.get("min")),
-        "alltime_price_max": _to_float(bp.get("max")),
-        "alltime_first_date": _iso_date(bp.get("first")),
-        "alltime_last_date": _iso_date(bp.get("last")),
-        "images": _image_urls(p.get("images")),
-        "offers_url": f"https://{site}{urls.get('offers')}" if urls.get("offers") else None,
-        "test_reviews": len(p.get("test_reviews") or []),
-        "gtin": p.get("gtin") or None,
-    }
-
-
-def _summarize_offer(o: dict, loc: str) -> dict:
-    """One shop's offer: price, cheapest shipping to `loc` and what the shop says
-    about stock. Shipping is listed per payment method, and a negative value
-    there is a prepayment discount rather than a shipping cost, so those are
-    skipped; a shop with no shipping entry only sells for pickup."""
-    shop = o.get("shop") or {}
-    price = _to_float((o.get("price") or {}).get("value"))
-    methods = ((shop.get("shipping") or {}).get(loc) or {}).values()
-    costs = [_to_float(m.get("shipping_price")) for m in methods if isinstance(m, dict)]
-    costs = [c for c in costs if c is not None and c >= 0]
-    shipping = min(costs) if costs else None
-    stock = (((o.get("avl") or {}).get("descr") or [{}])[0] or {}).get("text") or ""
-    rating = shop.get("rating") or {}
-    return {
-        "shop": shop.get("merchant_name") or shop.get("name"),
-        "price": price,
-        "shipping": shipping,
-        "total": round(price + shipping, 2) if price is not None and shipping is not None else None,
-        # the first line is the mail-order stock; the rest lists pickup branches
-        "availability": stock.splitlines()[0] if stock else None,
-        "shop_rating": round(rating["rating"], 1) if isinstance(rating.get("rating"), (int, float)) else None,
-        "shop_rating_count": rating.get("count"),
-    }
-
-
-def _summarize_deal(d: dict, site: str = "geizhals.at") -> dict:
-    return {
-        "id": d.get("id"),
-        "name": _clean_html(d.get("product")),
-        "manufacturer": d.get("manufacturer_name"),
-        "category": d.get("category_path") or d.get("cat_name"),
-        "category_code": d.get("cat"),
-        "change_percent": d.get("change_in_percent"),
-        "change_amount": d.get("change_in_local"),
-        "old_price": d.get("old_price"),
-        "best_price": d.get("best_price"),
-        "alltime_best": bool(d.get("alltime_best")),
-        "top_deal": bool(d.get("top_deal")),
-        "rank": d.get("rank"),
-        "offer_count": d.get("offer_count"),
-        "rating_stars": d.get("rating_stars"),
-        "rating_count": d.get("rating_count"),
-        "shop": d.get("hname"),
-        "changed_at": _iso_minute(d.get("timestamp")),
-        # best_deep_link is a 300-character tracking redirect to the shop; the
-        # product page is what an answer links to, and its short form is enough
-        "url": f"https://{site}/a{d['id']}.html" if d.get("id") else None,
-    }
-
-
-def _summarize_category_hit(p: dict, category: Optional[str] = None, lang: str = "en") -> dict:
-    """Normalize a categorylist product into the same shape ``search_geizhals``
-    returns (categorylist ships raw, inconsistent fields otherwise), so code
-    that reads either source sees the same keys."""
-    pricing = p.get("pricing") or {}
-    best_price = _to_float(p.get("best_price"))
-    offer_count = p.get("offer_count")
-    available = bool(best_price is not None and (offer_count or 0) > 0)
-    return {
-        "id": p.get("id"),
-        "variant_id": p.get("variant_id"),
-        "name": _clean_html(p.get("product_for_sort") or p.get("product")),
-        # every hit of a category listing is in that category by definition
-        "category": _CATEGORY_PATH[lang].get(category or ""),
-        "category_code": category,
-        "best_price": best_price,
-        "currency": pricing.get("loc_currency"),
-        "offer_count": offer_count,
-        "available": available,
-        "shop": p.get("best_merch_name"),
-        "rating_stars": p.get("rating_stars"),
-        "rating_count": p.get("rating_count"),
-        # product_link carries the listing's own ?vl=..&hloc=.. query
-        "url": (p.get("product_link") or "").split("?")[0] or None,
-        "mpn": p.get("mpn"),
-    }
-
-
-def _summarize_compare(p: dict, price_map: dict) -> dict:
-    """Normalize one product of a comparison: pair properties with cleaned
-    spec values, and fill in pricing from ``products_details`` when the
-    compare endpoint left it empty (it is not reliable for every id)."""
-    labels = p.get("properties") or []
-    values = p.get("propvalues") or []
-    # The endpoint unions the property list across all compared products, so a
-    # printhead ends up with an empty "Förderhöhe" from the pump next to it.
-    # An empty string reads as "unknown", not "does not apply" -- drop those.
-    specs = {label: cleaned for label, value in zip(labels, values)
-             if (cleaned := _clean_html(value)) not in (None, "", [], {})}
-
-    pricing = p.get("pricing") or {}
-    fallback = price_map.get(str(p.get("id")), {})
-    best_price = _to_float(p.get("price_raw"))
-    if best_price is None:
-        best_price = fallback.get("best_price")
-    offers = p.get("offers") or fallback.get("offers")
-
-    rating = p.get("rating") or {}
-    share = p.get("share_url")
-    # No price and no offers is a real state (discontinued or temporarily
-    # unlisted), not missing data -- say so rather than leaving a bare null.
-    available = bool(best_price is not None and (offers or 0) > 0)
-    return {
-        "id": p.get("id"),
-        "name": p.get("name"),
-        "manufacturer": p.get("mfc"),
-        "category": p.get("catname"),
-        "best_price": best_price,
-        "currency": pricing.get("loc_currency"),
-        "offers": offers,
-        "available": available,
-        "rating_stars": _to_float(rating.get("rate_val")),
-        "rating_count": rating.get("count"),
-        "url": urllib.parse.unquote(share) if share else None,
-        "specs": specs,
-    }
-
-
-# A broad query brings 20+ manufacturers and a dozen categories; the largest
-# ones are what a narrower follow-up call picks from.
-FACET_LIMIT = 10
-
-
-def _largest(facet: Optional[list]) -> list[dict]:
-    """The FACET_LIMIT biggest buckets of a facet list, largest first."""
-    buckets = [b for b in facet or [] if isinstance(b, dict)]
-    return sorted(buckets, key=lambda b: -(b.get("count") or 0))[:FACET_LIMIT]
-
-
-async def _search_products(query: str, *, loc: str, hloc, lang: str, category=None,
-                           manufacturer=None, sort: str = "", rows: int = 10,
-                           offset: int = 0) -> dict:
-    """Raw product search (shared by the search tool and the model/match tools)."""
-    payload = {
-        "query": query,
-        # bestprice_extrema=1 costs nothing extra and is what lets a hit with no
-        # live offers still report its all-time range (see _summarize_search_hit)
-        "params": _params(loc, hloc, lang=lang, offset=offset, pagesize=_page_size(rows), n_offers=1,
-                          bestprice_extrema=1, add_popularity=False,
-                          filter_category=category or "", filter_manufacturer=manufacturer or 0,
-                          add_ratings=1, show_parent_category=1, category_suggestions=1,
-                          sort=sort, category_suggestions_details=1, add_asin=1,
-                          allow_other_hloc=1, has_variants=0),
-    }
-    return (await _post("search_product", payload)).get("response") or {}
 
 
 # ---------------------------------------------------------------------------
@@ -686,26 +154,26 @@ async def search_geizhals(
         offset: Paging offset. Default 0.
     """
     rows = _cap(rows, "rows")
-    data = await _search_products(query, loc=loc, hloc=hloc, lang=lang, category=category,
+    data = await api.search_products(query, loc=loc, hloc=hloc, lang=lang, category=category,
                                   manufacturer=manufacturer, sort=sort, rows=rows, offset=offset)
     # every list below can come back as an explicit null (no hits, uncategorised
     # hits, no facets), so `or []` rather than a dict default
     facets = data.get("facet_aggregates") or {}
-    site = _site(loc)
+    site = summaries.site_for(loc)
     # Geizhals reports the facet's price floor as 0 whatever the hits cost, so
     # null it rather than pass off a meaningless number as the cheapest hit.
     price_range = facets.get("price_range") or {}
     price_range = {"min": price_range.get("min") or None, "max": price_range.get("max") or None}
     return {
         "total": data.get("total"),
-        "results": [_summarize_search_hit(p, site, lang) for p in (data.get("products") or [])[:rows]],
+        "results": [summaries.search_hit(p, site, lang) for p in (data.get("products") or [])[:rows]],
         "facets": {
             "categories": [{"id": c.get("id"),
-                            "name": (_CATEGORY_PATH[lang].get(c.get("id") or "") or [c.get("name")])[-1],
+                            "name": (CATEGORY_PATH[lang].get(c.get("id") or "") or [c.get("name")])[-1],
                             "count": c.get("count")}
-                           for c in _largest(facets.get("categories"))],
+                           for c in summaries.largest(facets.get("categories"))],
             "manufacturers": [{"id": m.get("id"), "name": m.get("name"), "count": m.get("count")}
-                              for m in _largest(facets.get("manufacturer"))],
+                              for m in summaries.largest(facets.get("manufacturer"))],
             "price_range": price_range,
         },
     }
@@ -716,17 +184,17 @@ async def _last_known_price(product_id: int, loc: str) -> dict:
     discontinued product still gives an agent something to compare against
     instead of a bare null."""
     try:
-        data = await _post("price_history", {"id": product_id,
+        data = await api.post("price_history", {"id": product_id,
                                              "params": {"days": 365, "loc": loc, "hloc": []}})
-    except UpstreamError:
+    except api.UpstreamError:
         return {}
     for point in reversed(data.get("response") or []):
         if isinstance(point, list) and len(point) >= 2 and point[1] is not None:
-            date = _iso_date(point[0])
+            date = summaries.iso_date(point[0])
             days = None
             if date:
                 days = (datetime.now(timezone.utc).date() - datetime.fromisoformat(date).date()).days
-            return {"last_known_price": _to_float(point[1]), "last_known_date": date,
+            return {"last_known_price": summaries.to_float(point[1]), "last_known_date": date,
                     "days_since_last_price": days}
     return {}
 
@@ -754,15 +222,15 @@ async def get_product(product_id: int, *, loc: Country = "at",
     payload = {
         "query": str(product_id),
         "type": "id",
-        "params": _params(loc, hloc, lang=lang, n_offers=n_offers, add_ratings=1, merchant_details=1,
+        "params": api.params(loc, hloc, lang=lang, n_offers=n_offers, add_ratings=1, merchant_details=1,
                           bestprice_extrema=True, review_details=1, test_reviews=True,
                           image_size="n"),
     }
-    response = (await _post("query_product", payload)).get("response") or []
+    response = (await api.post("query_product", payload)).get("response") or []
     if not response:
         raise ToolError(f"No product with id {product_id}.")
-    product = _summarize_product(response[0], _site(loc))
-    product["offers"] = [_summarize_offer(o, loc) for o in (response[0].get("offers") or [])[:n_offers]
+    product = summaries.product(response[0], summaries.site_for(loc))
+    product["offers"] = [summaries.offer(o, loc) for o in (response[0].get("offers") or [])[:n_offers]
                          if isinstance(o, dict)]
     if not product["available"]:
         product.update(await _last_known_price(product_id, loc))
@@ -809,26 +277,26 @@ async def get_price_history(product_id: int, *, days: int = 31,
         granularity: "change" (default), "day" or "week" (each ISO week's last
             price).
     """
-    window = min(HISTORY_WINDOWS, key=lambda w: abs(w - days))
+    window = min(api.HISTORY_WINDOWS, key=lambda w: abs(w - days))
     payload = {"id": product_id, "params": {"days": window, "loc": loc, "hloc": []}}
     try:
-        data = await _post("price_history", payload)
-    except UpstreamError as exc:
+        data = await api.post("price_history", payload)
+    except api.UpstreamError as exc:
         if exc.status != 400:
             raise
-        raise UpstreamError(
+        raise api.UpstreamError(
             f"{exc} Product {product_id} most likely has no Geizhals price history -- "
             f"uncategorised marketplace listings (a single shop's feed, no category_code "
             f"on the search hit) are not price-tracked.", exc.status
         ) from exc
     meta = data.get("meta") or {}
-    points = [[_iso_date(p[0]), _to_float(p[1])] for p in (data.get("response") or [])
+    points = [[summaries.iso_date(p[0]), summaries.to_float(p[1])] for p in (data.get("response") or [])
               if isinstance(p, list) and len(p) >= 2 and p[1] is not None]
     prices = [p[1] for p in points]
 
     # meta.current_best is the live best offer and is null once a product stops
     # being offered; the series still holds what it last cost.
-    current_best = _to_float(meta.get("current_best"))
+    current_best = summaries.to_float(meta.get("current_best"))
     last_date, last_price = points[-1] if points else (None, None)
     stale = ((datetime.now(timezone.utc).date() - datetime.fromisoformat(last_date).date()).days
              if last_date else None)
@@ -846,10 +314,10 @@ async def get_price_history(product_id: int, *, days: int = 31,
         "window_avg": round(sum(prices) / len(prices), 2) if prices else None,
         "window_change_percent": (round((prices[-1] - prices[0]) / prices[0] * 100, 1)
                                   if len(prices) > 1 and prices[0] else None),
-        "alltime_min": _to_float(meta.get("min")),
-        "alltime_max": _to_float(meta.get("max")),
-        "alltime_first_date": _iso_date(meta.get("first_ts")),
-        "alltime_last_date": _iso_date(meta.get("last_ts")),
+        "alltime_min": summaries.to_float(meta.get("min")),
+        "alltime_max": summaries.to_float(meta.get("max")),
+        "alltime_first_date": summaries.iso_date(meta.get("first_ts")),
+        "alltime_last_date": summaries.iso_date(meta.get("last_ts")),
     }
     if include_series:
         result["series"] = {"change": _changes, "day": list, "week": _weekly}[granularity](points)
@@ -870,7 +338,7 @@ async def get_product_ratings(product_id: int, *, loc: Country = "at") -> dict:
         "product_id": product_id, "filter_ghonly": 0, "offset": 0,
         "pagesize": 1, "sort": "latest", "params": {"comments": True},
     }
-    data = await _post("query_product_ratings", payload)
+    data = await api.post("query_product_ratings", payload)
     per_star = data.get("per_star_rating_count") or {}
     # total_star_ratings is sometimes 0 even when per_star holds the real
     # counts, so fall back to summing them.
@@ -880,9 +348,9 @@ async def get_product_ratings(product_id: int, *, loc: Country = "at") -> dict:
     # the endpoint always answers with a geizhals.de url, whatever loc says
     url = data.get("ratings_url")
     if url:
-        url = re.sub(r"^https://[^/]+", f"https://{_site(loc)}", url)
+        url = re.sub(r"^https://[^/]+", f"https://{summaries.site_for(loc)}", url)
     return {
-        "product_name": _clean_html(data.get("product_name")),
+        "product_name": summaries.clean_html(data.get("product_name")),
         "average": data.get("aggregate_star_rating"),
         "total": total,
         "per_star": {star: per_star[star] for star in sorted(per_star, reverse=True)},
@@ -915,17 +383,17 @@ async def browse_category(category: str, *, loc: Country = "at",
     rows = _cap(rows, "rows")
     if price_min is not None and price_max is not None and price_min > price_max:
         raise ToolError(f"price_min ({price_min}) is above price_max ({price_max}); swap them.")
-    params = _params(loc, hloc, lang=lang, offset=offset, pagesize=_page_size(rows), sort=sort,
+    params = api.params(loc, hloc, lang=lang, offset=offset, pagesize=api.page_size(rows), sort=sort,
                      deals_as_array=1, add_metadata=True, asd=False, price_range=1,
                      bpmin=price_min or 0.0, bpmax=price_max or 250000.0,
                      reverse_order=0, t="alle", v="e", vl=loc, xf="", asuch="",
                      hide_deals=0, omit_description=1, allow_other_hloc=1, new_filters=0)
     try:
-        response = await _post("categorylist", {"category": category, "params": params})
-    except UpstreamError as exc:
+        response = await api.post("categorylist", {"category": category, "params": params})
+    except api.UpstreamError as exc:
         if exc.status != 400:
             raise
-        raise UpstreamError(
+        raise api.UpstreamError(
             f"{exc} '{category}' is probably not a valid category code -- use "
             f"list_categories to look one up.", exc.status
         ) from exc
@@ -936,7 +404,7 @@ async def browse_category(category: str, *, loc: Country = "at",
         "total": data.get("total"),
         # unlike the search facet, this one is real
         "price_range": data.get("price_range"),
-        "results": [_summarize_category_hit(p, category, lang)
+        "results": [summaries.category_hit(p, category, lang)
                     for p in products[:rows] if isinstance(p, dict)],
     }
 
@@ -954,15 +422,15 @@ async def compare_products(product_ids: list[int], *, loc: Country = "at") -> di
     if not 1 <= len(product_ids) <= MAX_COMPARE:
         raise ToolError(f"Pass 1 to {MAX_COMPARE} product ids (got {len(product_ids)}); "
                         f"each one adds its full spec sheet.")
-    products = (await _post("compare_products",
-                            {"ids": product_ids, "params": _params(loc, None)})).get("response") or []
+    products = (await api.post("compare_products",
+                            {"ids": product_ids, "params": api.params(loc, None)})).get("response") or []
 
     # The compare endpoint does not return pricing reliably for every id, so
     # backfill the best price / offer count from products_details.
     price_map: dict = {}
     try:
-        details = (await _post("products_details",
-                               {"id": product_ids, "params": _params(loc, None, images=1, availability=1)})
+        details = (await api.post("products_details",
+                               {"id": product_ids, "params": api.params(loc, None, images=1, availability=1)})
                    ).get("response") or {}
         # products_details keys its response by product id.
         entries = details.values() if isinstance(details, dict) else details
@@ -977,13 +445,13 @@ async def compare_products(product_ids: list[int], *, loc: Country = "at") -> di
                 bp = (d.get("pricing") or {}).get("loc_value")
             offer_count = d.get("offer_count")
             price_map[str(d.get("id"))] = {
-                "best_price": _to_float(bp),
+                "best_price": summaries.to_float(bp),
                 "offers": int(offer_count) if str(offer_count or "").isdigit() else None,
             }
     except Exception:
         logger.warning("products_details pricing backfill failed for compare_products", exc_info=True)
 
-    compared = [_summarize_compare(p, price_map) for p in products]
+    compared = [summaries.compared(p, price_map) for p in products]
     # a product with no live offers is exactly the EOL case a used-market
     # comparison cares about -- give it its last known price instead of a null
     unavailable = [p for p in compared if not p["available"] and p.get("id")]
@@ -991,49 +459,6 @@ async def compare_products(product_ids: list[int], *, loc: Country = "at") -> di
             *(_last_known_price(p["id"], loc) for p in unavailable))):
         product.update(last)
     return {"products": compared}
-
-
-# bestprice_development pages with `pg` (offset and page are ignored) and serves
-# at most 300 drops a page. Filtering and sorting happen here, so every page of
-# the current drops is fetched: the biggest drops are as likely to sit on the
-# last page as on the first.
-DEALS_PAGE_SIZE = 300
-# The feed usually holds about a thousand drops, i.e. four pages. A page takes
-# ~3s to answer, so those four are asked for at once instead of reading the
-# page count off page 1 first; a page past the end just repeats the last one.
-DEALS_USUAL_PAGES = 4
-DEALS_MAX_PAGES = 10
-
-
-async def _deal_pages(params: dict, pages) -> list[dict]:
-    return [(r.get("response") or {}) for r in await asyncio.gather(
-        *(_post("bestprice_development", {"params": {**params, "pg": pg}}) for pg in pages))]
-
-
-# Reading the whole feed takes a few seconds, so it is kept briefly: paging on
-# with `offset` should not wait for the same thousand drops again.
-DEALS_CACHE_SECONDS = 120
-_deals_cache: dict[str, tuple[float, list[dict], Optional[int]]] = {}
-
-
-async def _all_deals(params: dict) -> tuple[list[dict], Optional[int]]:
-    """Every current price drop and Geizhals' total, from a fresh cache if any."""
-    key = json.dumps(params, sort_keys=True)
-    cached = _deals_cache.get(key)
-    if cached and time.monotonic() - cached[0] < DEALS_CACHE_SECONDS:
-        return cached[1], cached[2]
-    pages = await _deal_pages(params, range(1, DEALS_USUAL_PAGES + 1))
-    last = min(int((pages[0].get("pager") or {}).get("last_page") or 1), DEALS_MAX_PAGES)
-    if last > DEALS_USUAL_PAGES:
-        pages += await _deal_pages(params, range(DEALS_USUAL_PAGES + 1, last + 1))
-    deals, seen = [], set()
-    for page in pages[:last]:
-        for d in page.get("deals") or []:
-            if isinstance(d, dict) and d.get("id") not in seen:
-                seen.add(d.get("id"))
-                deals.append(d)
-    _deals_cache[key] = (time.monotonic(), deals, pages[0].get("total"))
-    return deals, pages[0].get("total")
 
 
 @_tool
@@ -1068,8 +493,9 @@ async def get_deals(
     limit = _cap(limit, "limit")
     if offset < 0:
         raise ToolError(f"offset must not be negative (got {offset}).")
-    raw, total = await _all_deals(_params(loc, hloc, lang=lang, limit=DEALS_PAGE_SIZE, price_range=1))
-    deals = [_summarize_deal(d, _site(loc)) for d in raw]
+    raw, total = await api.all_deals(api.params(loc, hloc, lang=lang, limit=api.DEALS_PAGE_SIZE,
+                                                price_range=1))
+    deals = [summaries.deal(d, summaries.site_for(loc)) for d in raw]
     scanned = len(deals)
     top_deal_count = sum(1 for d in deals if d["top_deal"])
 
@@ -1097,134 +523,6 @@ async def get_deals(
             "total_available": total, "top_deal_count": top_deal_count,
             "next_offset": offset + limit if offset + limit < matched else None,
             "deals": deals}
-
-
-# ---------------------------------------------------------------------------
-# Model pricing & listing matching
-# ---------------------------------------------------------------------------
-_TOKEN_RE = re.compile(r"[a-z0-9]+")
-# Ad titles fuse the series and the model number ("RTX5070", "GTX1080"); Geizhals
-# always spaces them. Split those so the two sides are comparable.
-_FUSED_RE = re.compile(r"^([a-z]{2,4})(\d{3,5})$")
-
-# Words a marketplace ad title carries but a Geizhals product name never does.
-# Dropping them is what makes the token overlap between the two comparable.
-_AD_NOISE = {
-    "neu", "neuwertig", "gebraucht", "defekt", "ovp", "originalverpackt", "verpackung",
-    "rechnung", "garantie", "gewahrleistung", "versand", "abholung", "selbstabholung",
-    "reserviert", "verkauft", "vb", "fixpreis", "np", "wie", "sehr", "gut", "guter",
-    "zustand", "wenig", "kaum", "benutzt", "genutzt", "gunstig", "verkaufe", "verkauf",
-    "biete", "inkl", "und", "mit", "fur", "der", "die", "das", "eur", "euro", "stk",
-    "neuwertiger", "top", "voll", "funktionsfahig", "originalverpackung",
-    "ich", "mein", "meine", "meinen", "zu", "von", "nur", "privat", "privatverkauf",
-    "tausch", "inklusive", "ungeoffnet", "versiegelt", "neupreis", "kaufbeleg",
-}
-
-# Tokens that separate one model from its sibling. A candidate that carries one
-# the query does not (or the other way round) is a different product, not a
-# near miss -- "4070" vs "4070 Ti" vs "4070 Super".
-_VARIANT_TOKENS = {"ti", "super", "xt", "xtx", "pro", "max", "plus", "ultra", "mini", "le"}
-
-# An uncategorised hit is one shop's marketplace feed, not a Geizhals product
-# page: mostly prebuilt PCs and bundles whose long names spell out the very card
-# or phone being matched, so they cover every query word and would otherwise
-# score like the product itself.
-_UNCATEGORISED_FACTOR = 0.6
-
-# What a match needs to be acted on; the rest of a search hit is a get_product
-# call away once the right candidate is known.
-_CANDIDATE_FIELDS = {"id", "name", "category_code", "best_price", "offer_count", "available", "shop",
-                     "url", "alltime_price_min", "alltime_price_max", "alltime_last_date"}
-
-
-def _title_tokens(text: str) -> list[str]:
-    """Comparable tokens of a product name or ad title: folded, de-noised, with
-    fused series+number tokens split apart."""
-    out = []
-    for token in _TOKEN_RE.findall(_fold(text or "")):
-        if len(token) < 2 or token in _AD_NOISE:
-            continue
-        fused = _FUSED_RE.match(token)
-        out.extend(fused.groups() if fused else [token])
-    return out
-
-
-def _match_score(query: set, name: str) -> float:
-    """Heuristic 0-1 confidence that `name` is the same product as the query
-    tokens: how much of the query the name covers, discounted when the name
-    carries extra words, and heavily discounted on a model-number or
-    variant-marker mismatch."""
-    candidate = set(_title_tokens(name))
-    if not query or not candidate:
-        return 0.0
-    covered = query & candidate
-    if not covered:
-        return 0.0
-    # Geizhals appends the specs after the first comma ("..., 12GB GDDR7, HDMI");
-    # score how specific the match is against the name proper, not that tail.
-    head = set(_title_tokens((name or "").split(",")[0])) or candidate
-    matched_head = len(query & head)
-    # A word the query does not account for is weak evidence against a match --
-    # product names are simply longer than ad titles. Half-weight it, so a short
-    # name does not out-rank a better match that merely spells more out.
-    unexplained = (len(head) - matched_head) * 0.5
-    specificity = matched_head / (matched_head + unexplained) if matched_head else 0.0
-    score = len(covered) / len(query) * (0.75 + 0.25 * specificity)
-    numbers = {t for t in query if t.isdigit()}
-    if numbers and not numbers <= candidate:
-        score *= 0.4
-    if (_VARIANT_TOKENS & candidate) ^ (_VARIANT_TOKENS & query):
-        score *= 0.5
-    return round(min(score, 1.0), 3)
-
-
-def _median(values: list[float]) -> Optional[float]:
-    if not values:
-        return None
-    ordered = sorted(values)
-    mid = len(ordered) // 2
-    return ordered[mid] if len(ordered) % 2 else round((ordered[mid - 1] + ordered[mid]) / 2, 2)
-
-
-def _model_variants(hits: list[dict], wanted: set) -> list[dict]:
-    """Hits that really are the wanted model: every model word present, and no
-    variant marker the model itself does not carry -- "RTX 4070" must not be
-    priced off a 4070 Ti or a 4070 Super."""
-    out = []
-    for hit in hits:
-        tokens = set(_title_tokens(hit.get("name") or ""))
-        if wanted <= tokens and not (_VARIANT_TOKENS & tokens) - wanted:
-            out.append(hit)
-    return out
-
-
-async def _detect_category(model: str, wanted: set, *, loc: str, hloc) -> Optional[str]:
-    """Guess which category a model name belongs to.
-
-    An unscoped search for an expensive product is dominated by things that are
-    not it: cases and water blocks below it, prebuilt systems and notebooks
-    above. Both are excluded here -- containing products carry many words the
-    model name does not explain and lose on match score, and of the categories
-    that survive that cut the product's own is the dearest, because anything
-    borrowing a model's name to sell an accessory is cheaper than the model.
-    """
-    data = await _search_products(model, loc=loc, hloc=hloc, lang="en", sort="", rows=30)
-    hits = [_summarize_search_hit(p, _site(loc)) for p in (data.get("products") or [])]
-    scored = [(_match_score(wanted, h["name"] or ""), h)
-              for h in _model_variants(hits, wanted) if h["category_code"]]
-    if not scored:
-        return None
-    cutoff = max(score for score, _ in scored) - 0.03
-    by_category: dict = {}
-    for score, hit in scored:
-        if score >= cutoff:
-            by_category.setdefault(hit["category_code"], []).append(hit)
-
-    def rank(entry):
-        prices = [h["best_price"] for h in entry[1] if h["best_price"]]
-        return (_median(prices) or 0, len(entry[1]))
-
-    return max(by_category.items(), key=rank)[0]
 
 
 @_tool
@@ -1256,30 +554,30 @@ async def get_model_price_range(
             maximum 300.
     """
     max_variants = max(1, min(int(max_variants), 300))
-    site = _site(loc)
-    wanted = set(_title_tokens(model))
+    site = summaries.site_for(loc)
+    wanted = set(matching.title_tokens(model))
     if not wanted:
         raise ToolError(f"Nothing searchable in the model name {model!r}.")
 
     detected = None
     if category is None:
-        category = detected = await _detect_category(model, wanted, loc=loc, hloc=hloc)
+        category = detected = await matching.detect_category(model, wanted, loc=loc, hloc=hloc)
 
     # Relevance, not price: sorting by price would show the cheapest hits of a
     # fuzzy query, and for a pricey model those are all the *other* models --
     # an "iPhone 16 Pro" price sort is 60 cheaper iPhones and no 16 Pro at all.
-    data = await _search_products(model, loc=loc, hloc=hloc, lang="en", category=category,
+    data = await api.search_products(model, loc=loc, hloc=hloc, lang="en", category=category,
                                   sort="", rows=max_variants)
-    hits = [_summarize_search_hit(p, site) for p in (data.get("products") or [])[:max_variants]]
-    variants = _model_variants(hits, wanted)
+    hits = [summaries.search_hit(p, site) for p in (data.get("products") or [])[:max_variants]]
+    variants = matching.model_variants(hits, wanted)
     prices = [h["best_price"] for h in variants if h["available"] and h["best_price"] is not None]
     cheapest = sorted((h for h in variants if h["available"]), key=lambda h: h["best_price"])
     result = {
         "model": model,
         "category_code": category,
-        "category": _CATEGORY_PATH["en"].get(category or ""),
+        "category": CATEGORY_PATH["en"].get(category or ""),
         "min": min(prices) if prices else None,
-        "median": _median(prices),
+        "median": matching.median(prices),
         "max": max(prices) if prices else None,
         "variants": len(variants),
         "available": len(prices),
@@ -1330,28 +628,28 @@ async def match_geizhals(
         limit: Candidates to return, at most 50. Default 5.
     """
     limit = _cap(limit, "limit")
-    tokens = _title_tokens(title)
+    tokens = matching.title_tokens(title)
     if not tokens:
         raise ToolError(f"Nothing searchable left in the title {title!r} once the ad words are dropped.")
     # long ad titles are mostly prose; the leading words carry the product
     query = " ".join(tokens[:8])
-    site = _site(loc)
-    data = await _search_products(query, loc=loc, hloc=hloc, lang="en", category=category, rows=30)
+    site = summaries.site_for(loc)
+    data = await api.search_products(query, loc=loc, hloc=hloc, lang="en", category=category, rows=30)
     products = data.get("products") or []
     if not products and len(tokens) > 4:  # too specific -- retry on the head of the title
         query = " ".join(tokens[:4])
-        data = await _search_products(query, loc=loc, hloc=hloc, lang="en", category=category, rows=30)
+        data = await api.search_products(query, loc=loc, hloc=hloc, lang="en", category=category, rows=30)
         products = data.get("products") or []
 
     wanted = set(tokens)
     candidates = []
-    for hit in (_summarize_search_hit(p, site) for p in products):
-        score = _match_score(wanted, hit["name"] or "")
+    for hit in (summaries.search_hit(p, site) for p in products):
+        score = matching.match_score(wanted, hit["name"] or "")
         if not hit["category_code"]:
-            score = round(score * _UNCATEGORISED_FACTOR, 3)
+            score = round(score * matching.UNCATEGORISED_FACTOR, 3)
         if score:
             candidates.append({"confidence": score,
-                               **{k: v for k, v in hit.items() if k in _CANDIDATE_FIELDS}})
+                               **{k: v for k, v in hit.items() if k in matching.CANDIDATE_FIELDS}})
     candidates.sort(key=lambda c: (-c["confidence"], c["best_price"] is None))
     result = {"query": query, "count": len(candidates), "candidates": candidates[:limit]}
     if not candidates:
@@ -1378,20 +676,7 @@ async def list_categories(query: Optional[str] = None, limit: int = 40) -> dict:
         limit: At most 50. Default 40.
     """
     limit = _cap(limit, "limit")
-    flat: list = []
-    _walk_categories(_CATEGORIES, [], [], flat)
-    seen: set = set()
-    canonical = []
-    for node, path, path_de in flat:
-        code = _cat_code(node)
-        if not code or code in seen:
-            continue
-        seen.add(code)
-        canonical.append((code, node.get("title"), node.get("title_de"), path, path_de))
-    q = _norm(query) if query else None
-    rows = [{"code": code, "name": name, "name_de": name_de, "path": path}
-            for code, name, name_de, path, path_de in canonical
-            if not q or q in _norm(path) or q in _norm(path_de)]
+    rows = categories.search(query)
     return {"count": len(rows), "categories": rows[:limit]}
 
 

@@ -7,7 +7,7 @@ import os
 import httpx
 import pytest
 
-import main
+import geizhals.api
 
 pytestmark = [
     pytest.mark.anyio,
@@ -20,10 +20,10 @@ PRODUCT_ID = 2872867  # AMD Ryzen 7 7800X3D, tray
 
 @pytest.fixture(autouse=True)
 async def fresh_client(monkeypatch):
-    """main.client binds to the first event loop it runs on, and every test
+    """geizhals.api.client binds to the first event loop it runs on, and every test
     gets its own loop."""
     client = httpx.AsyncClient(http2=True)
-    monkeypatch.setattr(main, "client", client)
+    monkeypatch.setattr(geizhals.api, "client", client)
     yield
     await client.aclose()
 

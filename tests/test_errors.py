@@ -3,7 +3,7 @@
 import httpx
 import pytest
 
-import main
+import geizhals.api
 from conftest import ToolFailed
 from samples import search_response
 
@@ -32,22 +32,22 @@ async def test_nothing_searchable_is_an_error(api, call):
 
 
 async def test_a_400_keeps_its_hint_and_a_503_does_not(api, call):
-    api.on("categorylist", main.UpstreamError("Geizhals rejected it (HTTP 400).", 400))
+    api.on("categorylist", geizhals.api.UpstreamError("Geizhals rejected it (HTTP 400).", 400))
     with pytest.raises(ToolFailed, match="not a valid category code"):
         await call("browse_category", category="doesnotexist")
-    api.on("categorylist", main.UpstreamError("Geizhals could not answer it (HTTP 503).", 503))
+    api.on("categorylist", geizhals.api.UpstreamError("Geizhals could not answer it (HTTP 503).", 503))
     with pytest.raises(ToolFailed) as failure:
         await call("browse_category", category="hwaschf")
     assert "category code" not in str(failure.value)
 
-    api.on("price_history", main.UpstreamError("Geizhals rejected it (HTTP 400).", 400))
+    api.on("price_history", geizhals.api.UpstreamError("Geizhals rejected it (HTTP 400).", 400))
     with pytest.raises(ToolFailed, match="no Geizhals price history"):
         await call("get_price_history", product_id=6773734585)
 
 
 @pytest.fixture
 def http(monkeypatch):
-    """Point main.client at a canned HTTP status and skip the retry sleeps."""
+    """Point geizhals.api.client at a canned HTTP status and skip the retry sleeps."""
     seen = []
 
     async def no_sleep(_):
@@ -57,27 +57,27 @@ def http(monkeypatch):
         def handler(request):
             seen.append(request)
             return httpx.Response(status, json=body if body is not None else {})
-        monkeypatch.setattr(main, "client", httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+        monkeypatch.setattr(geizhals.api, "client", httpx.AsyncClient(transport=httpx.MockTransport(handler)))
         return seen
 
-    monkeypatch.setattr(main.asyncio, "sleep", no_sleep)
+    monkeypatch.setattr(geizhals.api.asyncio, "sleep", no_sleep)
     return install
 
 
 async def test_post_signs_and_returns_json(http):
     seen = http(200, search_response([]))
-    assert (await main._post("search_product", {"query": "x"}))["response"]["total"] == 0
+    assert (await geizhals.api.post("search_product", {"query": "x"}))["response"]["total"] == 0
     assert seen[0].headers["authorization"].startswith("Bearer ")
 
 
 @pytest.mark.parametrize("status, message, attempts", [
     (403, "signing credentials", 1),
     (400, "check the arguments", 1),
-    (503, "on their side, not the arguments", main.MAX_RETRIES + 1),
+    (503, "on their side, not the arguments", geizhals.api.MAX_RETRIES + 1),
 ])
 async def test_post_phrases_each_failure(http, status, message, attempts):
     seen = http(status)
-    with pytest.raises(main.UpstreamError, match=message) as failure:
-        await main._post("bestprice_development", {"params": {}})
+    with pytest.raises(geizhals.api.UpstreamError, match=message) as failure:
+        await geizhals.api.post("bestprice_development", {"params": {}})
     assert failure.value.status == status
     assert len(seen) == attempts

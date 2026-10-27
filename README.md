@@ -241,9 +241,14 @@ ad is. Clients that support prompts show it as "Check a second-hand listing".
 
 ## Notes
 
+- `main.py` is the server and its tools. What they build on lives in the
+  `geizhals` package: `api.py` signs and sends the requests, `summaries.py`
+  turns the raw records into results, `matching.py` matches ad titles and
+  models, and `categories.py` reads the category tree.
 - `data/categories.json` is a snapshot of Geizhals' category tree (title,
-  title_de, id, children). `main.py` loads it for `list_categories`, which
-  matches queries against both the English and German names.
+  title_de, id, children). `geizhals/categories.py` loads it for
+  `list_categories`, which matches queries against both the English and German
+  names.
 - The badges above read `coverage.json` from the `coverage` branch.
   `scripts/update_coverage.py` refreshes it from the Geizhals homepage, and a
   daily GitHub Action commits any change to that branch, so the refresh stays
@@ -272,7 +277,7 @@ tests once a day, which is what catches Geizhals rotating its signing secret.
 ## Troubleshooting
 
 **`403 invalid request_fingerprint in payload`** — the HMAC secret or
-signing scheme in `main.py` (`GH_HMAC_SECRET`, `request_fingerprint`,
+signing scheme in `geizhals/api.py` (`GH_HMAC_SECRET`, `request_fingerprint`,
 `API_HOST`) no longer matches what the live Geizhals app sends. This is
 reverse-engineered from the app and hardcoded, so it can drift whenever
 Geizhals rotates the secret or changes the fingerprint scheme.

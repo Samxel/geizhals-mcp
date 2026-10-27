@@ -2,7 +2,7 @@
 
 import pytest
 
-import main
+import geizhals.api
 from conftest import ToolFailed
 from samples import deal
 
@@ -39,7 +39,7 @@ async def test_pages_past_the_end_are_ignored(api, call):
         "total": 1, "pager": {"last_page": 1}, "deals": only}})
     result = await call("get_deals")
     assert result["scanned"] == 1
-    assert len(api.sent("bestprice_development")) == main.DEALS_USUAL_PAGES
+    assert len(api.sent("bestprice_development")) == geizhals.api.DEALS_USUAL_PAGES
 
 
 async def test_a_long_feed_is_read_to_its_last_page(api, call):
@@ -55,7 +55,7 @@ async def test_a_long_feed_is_read_to_its_last_page(api, call):
 async def test_page_count_is_bounded(api, call):
     api.on("bestprice_development", paged([[deal(1, percent=-20.0, best=80.0, old=100.0)]], last_page=500))
     await call("get_deals")
-    assert len(api.sent("bestprice_development")) == main.DEALS_MAX_PAGES
+    assert len(api.sent("bestprice_development")) == geizhals.api.DEALS_MAX_PAGES
 
 
 async def test_offset_pages_through_the_matches(api, call):
@@ -75,10 +75,10 @@ async def test_paging_on_reuses_the_feed_until_it_goes_stale(api, call, monkeypa
     api.on("bestprice_development", paged([[deal(1, percent=-20.0, best=80.0, old=100.0)]]))
     await call("get_deals")
     await call("get_deals", offset=1)
-    assert len(api.sent("bestprice_development")) == main.DEALS_USUAL_PAGES
+    assert len(api.sent("bestprice_development")) == geizhals.api.DEALS_USUAL_PAGES
     # another country is another feed
     await call("get_deals", loc="de")
-    assert len(api.sent("bestprice_development")) == 2 * main.DEALS_USUAL_PAGES
-    monkeypatch.setattr(main, "DEALS_CACHE_SECONDS", 0)
+    assert len(api.sent("bestprice_development")) == 2 * geizhals.api.DEALS_USUAL_PAGES
+    monkeypatch.setattr(geizhals.api, "DEALS_CACHE_SECONDS", 0)
     await call("get_deals")
-    assert len(api.sent("bestprice_development")) == 3 * main.DEALS_USUAL_PAGES
+    assert len(api.sent("bestprice_development")) == 3 * geizhals.api.DEALS_USUAL_PAGES
