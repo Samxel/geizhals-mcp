@@ -179,6 +179,19 @@ def _page_size(rows: int) -> int:
     return next((s for s in PAGE_SIZES if s >= rows), PAGE_SIZES[-1])
 
 
+# One call must not be able to flood the model's context -- a 500-row search is
+# ~120k tokens. Larger asks are clamped; `offset` pages through the rest.
+MAX_ROWS = 50
+MAX_COMPARE = 10
+
+
+def _cap(value: int, name: str) -> int:
+    """`value` clamped to 1..MAX_ROWS, for a tool's row count / limit."""
+    if value < 1:
+        raise ToolError(f"{name} must be at least 1 (got {value}).")
+    return min(value, MAX_ROWS)
+
+
 def _leaf_cat(categories: Optional[list]) -> Optional[str]:
     """The browseable `cat` code of the deepest category in a hit's category
     path (the code `browse_category` / the `category` search filter take)."""
@@ -572,11 +585,10 @@ async def search_geizhals(
             you can actually buy, and the default when you want the whole
             population -- ``total`` is only comparable across calls that sort
             the same way.
-        rows: Max results to return (page size). Default 10.
+        rows: Max results to return (page size), at most 50. Default 10.
         offset: Paging offset into the result set. Default 0.
     """
-    if rows < 1:
-        raise ToolError(f"rows must be at least 1 (got {rows}).")
+    rows = _cap(rows, "rows")
     data = await _search_products(query, loc=loc, hloc=hloc, lang=lang, category=category,
                                   manufacturer=manufacturer, sort=sort, rows=rows, offset=offset)
     # every list below can come back as an explicit null (no hits, uncategorised
@@ -823,11 +835,10 @@ async def browse_category(category: str, *, loc: Country = "at",
         sort: "t" (default relevance), "p" (price), "n" (newest) or "r"
             (rating).
         price_min / price_max: Optional best-price bounds to filter to.
-        rows: Max results to return (page size). Default 20.
+        rows: Max results to return (page size), at most 50. Default 20.
         offset: Paging offset into the result set. Default 0.
     """
-    if rows < 1:
-        raise ToolError(f"rows must be at least 1 (got {rows}).")
+    rows = _cap(rows, "rows")
     if price_min is not None and price_max is not None and price_min > price_max:
         raise ToolError(f"price_min ({price_min}) is above price_max ({price_max}); swap them.")
     params = _params(loc, hloc, lang=lang, offset=offset, pagesize=_page_size(rows), sort=sort,
@@ -875,11 +886,14 @@ async def compare_products(product_ids: list[int], *, loc: Country = "at",
     product can still be compared against a used-market price.
 
     Args:
-        product_ids: The Geizhals product ids (``gzhid``) to compare; pass two
-            or more for a meaningful side-by-side.
+        product_ids: The Geizhals product ids (``gzhid``) to compare, at most
+            10; pass two or more for a meaningful side-by-side.
         loc: Country site for pricing: "at", "de", "eu", "uk", "pl" or "sk".
         lang: Display language for names/labels, "en" (default) or "de".
     """
+    if not 1 <= len(product_ids) <= MAX_COMPARE:
+        raise ToolError(f"Pass 1 to {MAX_COMPARE} product ids (got {len(product_ids)}); "
+                        f"each one adds its full spec sheet.")
     products = (await _post("compare_products",
                             {"ids": product_ids, "params": _params(loc, None, lang=lang)})).get("response") or []
 
@@ -965,8 +979,10 @@ async def get_deals(
             percent, e.g. 15 for "-15% or better". Omit for no floor.
         max_price: Only keep deals whose current ``best_price`` is at or below
             this. Omit for no cap.
-        limit: Target number of matching deals to return. Default 20.
+        limit: Target number of matching deals to return, at most 50.
+            Default 20.
     """
+    limit = _cap(limit, "limit")
     params = _params(loc, hloc, lang=lang, limit=max(limit, DEALS_POOL), price_range=1)
     data = (await _post("bestprice_development", {"params": params})).get("response") or {}
     deals = [_summarize_deal(d) for d in (data.get("deals") or [])]
@@ -1239,8 +1255,9 @@ async def match_geizhals(
             type, it removes most of the wrong-category candidates.
         loc: Country site for pricing: "at", "de", "eu", "uk", "pl" or "sk".
         hloc: Which shop countries' offers to include; defaults to ``[loc]``.
-        limit: Max candidates to return. Default 5.
+        limit: Max candidates to return, at most 50. Default 5.
     """
+    limit = _cap(limit, "limit")
     tokens = _title_tokens(title)
     if not tokens:
         raise ToolError(f"Nothing searchable left in the title {title!r} once the ad words are dropped.")
@@ -1295,8 +1312,9 @@ async def list_categories(query: Optional[str] = None, limit: int = 40) -> dict:
             the whole category path in English and German, e.g. "graphics",
             "grafikkarten" or "waschmaschine". Omit to list all categories, up
             to ``limit``.
-        limit: Max number of categories to return. Default 40.
+        limit: Max number of categories to return, at most 50. Default 40.
     """
+    limit = _cap(limit, "limit")
     flat: list = []
     _walk_categories(_CATEGORIES, [], [], flat)
     seen: set = set()
