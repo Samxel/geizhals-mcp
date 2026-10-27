@@ -54,6 +54,10 @@ async def test_browse_compare_and_deals(call):
     assert len(compared["products"]) == 2
     deals = await call("get_deals", limit=5)
     assert deals["deals"]
+    # the feed pages with pg; all of it is scanned, not just the first 300
+    assert deals["scanned"] == deals["total_available"] > 300
+    more = await call("get_deals", limit=5, offset=deals["next_offset"])
+    assert not {d["id"] for d in more["deals"]} & {d["id"] for d in deals["deals"]}
 
 
 async def test_german_site_answers_in_euro(call):

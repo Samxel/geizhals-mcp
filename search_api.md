@@ -86,8 +86,12 @@ feedback) tied to a user account.
 - `meta.current_best` is `null` once a product has no live offers; the series
   still holds its last recorded price, which is the only way to price a
   discontinued product.
-- `bestprice_development` honours `limit` (tested up to 300) but ignores
-  `offset`, so filtering and sorting can only work over one fetched page.
+- `bestprice_development` honours `limit` (tested up to 300) and pages with
+  `pg`; `offset` and `page` are ignored. `pager.last_page` says how many pages
+  there are (about four of 300), and a `pg` past the end repeats the last page.
+  Each page takes ~3s, and the biggest drops are as likely to be on the last
+  page as on the first. `boundary_filters` reports the drop range (up to 90%),
+  but none of the `drop_percent` param spellings tried filtered anything.
 - `query_product_ratings` always answers with a `geizhals.de` `ratings_url`,
   whatever `loc` says.
 - `facet_aggregates.price_range.min` is the filter widget's floor and is

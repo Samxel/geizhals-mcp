@@ -989,9 +989,47 @@ async def compare_products(product_ids: list[int], *, loc: Country = "at") -> di
     return {"products": compared}
 
 
-# bestprice_development has no offset, so filtering and sorting can only ever
-# work over one fetched page -- take a generous one and trim it down locally.
-DEALS_POOL = 300
+# bestprice_development pages with `pg` (offset and page are ignored) and serves
+# at most 300 drops a page. Filtering and sorting happen here, so every page of
+# the current drops is fetched: the biggest drops are as likely to sit on the
+# last page as on the first.
+DEALS_PAGE_SIZE = 300
+# The feed usually holds about a thousand drops, i.e. four pages. A page takes
+# ~3s to answer, so those four are asked for at once instead of reading the
+# page count off page 1 first; a page past the end just repeats the last one.
+DEALS_USUAL_PAGES = 4
+DEALS_MAX_PAGES = 10
+
+
+async def _deal_pages(params: dict, pages) -> list[dict]:
+    return [(r.get("response") or {}) for r in await asyncio.gather(
+        *(_post("bestprice_development", {"params": {**params, "pg": pg}}) for pg in pages))]
+
+
+# Reading the whole feed takes a few seconds, so it is kept briefly: paging on
+# with `offset` should not wait for the same thousand drops again.
+DEALS_CACHE_SECONDS = 120
+_deals_cache: dict[str, tuple[float, list[dict], Optional[int]]] = {}
+
+
+async def _all_deals(params: dict) -> tuple[list[dict], Optional[int]]:
+    """Every current price drop and Geizhals' total, from a fresh cache if any."""
+    key = json.dumps(params, sort_keys=True)
+    cached = _deals_cache.get(key)
+    if cached and time.monotonic() - cached[0] < DEALS_CACHE_SECONDS:
+        return cached[1], cached[2]
+    pages = await _deal_pages(params, range(1, DEALS_USUAL_PAGES + 1))
+    last = min(int((pages[0].get("pager") or {}).get("last_page") or 1), DEALS_MAX_PAGES)
+    if last > DEALS_USUAL_PAGES:
+        pages += await _deal_pages(params, range(DEALS_USUAL_PAGES + 1, last + 1))
+    deals, seen = [], set()
+    for page in pages[:last]:
+        for d in page.get("deals") or []:
+            if isinstance(d, dict) and d.get("id") not in seen:
+                seen.add(d.get("id"))
+                deals.append(d)
+    _deals_cache[key] = (time.monotonic(), deals, pages[0].get("total"))
+    return deals, pages[0].get("total")
 
 
 @_tool
@@ -1004,14 +1042,16 @@ async def get_deals(
     min_discount_percent: Optional[float] = None,
     max_price: Optional[float] = None,
     limit: int = 20,
+    offset: int = 0,
 ) -> dict:
     """Current price drops, for "what's on sale right now". Each deal has
     ``change_percent`` (negative means cheaper), ``change_amount``,
     ``old_price``, ``best_price`` and the ``alltime_best`` / ``top_deal`` flags.
 
-    Geizhals hands out one pool of up to 300 drops, which is filtered and
-    sorted here. ``scanned`` is the pool size, ``matched`` how many passed the
-    filters and ``top_deal_count`` how many in the pool are top deals.
+    Every current drop (about a thousand) is scanned, then filtered and
+    sorted here. ``scanned`` is how many that were, ``matched`` how many passed
+    the filters and ``top_deal_count`` how many of all drops are top deals.
+    While more matches are left, ``next_offset`` says where the next page starts.
 
     Args:
         sort: "percent" (biggest drop, default), "price" (cheapest),
@@ -1019,11 +1059,13 @@ async def get_deals(
         min_discount_percent: Keep drops of at least this many percent.
         max_price: Keep deals with a ``best_price`` of at most this.
         limit: Deals to return, at most 50. Default 20.
+        offset: Skip this many matches, to page on. Default 0.
     """
     limit = _cap(limit, "limit")
-    params = _params(loc, hloc, lang=lang, limit=max(limit, DEALS_POOL), price_range=1)
-    data = (await _post("bestprice_development", {"params": params})).get("response") or {}
-    deals = [_summarize_deal(d, _site(loc)) for d in (data.get("deals") or [])]
+    if offset < 0:
+        raise ToolError(f"offset must not be negative (got {offset}).")
+    raw, total = await _all_deals(_params(loc, hloc, lang=lang, limit=DEALS_PAGE_SIZE, price_range=1))
+    deals = [_summarize_deal(d, _site(loc)) for d in raw]
     scanned = len(deals)
     top_deal_count = sum(1 for d in deals if d["top_deal"])
 
@@ -1046,9 +1088,10 @@ async def get_deals(
                                   d["change_percent"] if d["change_percent"] is not None else 0))
 
     matched = len(deals)
-    deals = deals[:limit]
+    deals = deals[offset:offset + limit]
     return {"count": len(deals), "matched": matched, "scanned": scanned,
-            "total_available": data.get("total"), "top_deal_count": top_deal_count,
+            "total_available": total, "top_deal_count": top_deal_count,
+            "next_offset": offset + limit if offset + limit < matched else None,
             "deals": deals}
 
 

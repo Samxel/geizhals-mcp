@@ -47,6 +47,8 @@ class FakeAPI:
 def api(monkeypatch):
     fake = FakeAPI()
     monkeypatch.setattr(main, "_post", fake)
+    # a feed cached by an earlier test would hide this test's canned one
+    main._deals_cache.clear()
     return fake
 
 

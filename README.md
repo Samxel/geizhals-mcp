@@ -202,8 +202,10 @@ last known price.
 Current price drops: products whose best price just fell, with the percent and
 amount off and a link to the product page. Sort by biggest `percent` drop,
 `price`, `latest`, `popularity` or `top` deals, and filter with
-`min_discount_percent` / `max_price`. `limit` (up to 50) is a target number of
-matches, not a fetch size.
+`min_discount_percent` / `max_price`. Filters and sorting work over every
+current drop (about a thousand), and `limit` (up to 50) is how many matches come
+back. `next_offset` pages on through the rest; the feed is kept for two minutes,
+so the next page answers at once.
 
 **`get_model_price_range(model, ...)`**
 
