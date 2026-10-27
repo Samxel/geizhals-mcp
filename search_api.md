@@ -47,7 +47,7 @@ Most methods take a `params` object with:
 
 | Field | Meaning |
 |---|---|
-| `loc` | pricing site / country (`at`, `de`, `eu`, ...) |
+| `loc` | pricing site / country (`at`, `de`, `eu`, `uk`, `pl`; see [Sites](#sites)) |
 | `hloc` | list of shop countries to include |
 | `lang` | response language (`en`, `de`) |
 | `pagesize` / `offset` | paging. `pagesize` is validated against a fixed set (1, 5, 10, 30, 100, 300, 1000); any other value returns 400 |
@@ -76,7 +76,7 @@ feedback) tied to a user account.
 
 - `search_product` hits carry the live price in `prices.best` / `prices.avg`
   next to `offer_count` and `offers[].shop.name`, so a search already answers
-  "what does it cost" — `query_product` is only needed for ratings and images.
+  "what does it cost" — `query_product` is only needed for offers, ratings and images.
 - Uncategorised hits (Amazon passthrough listings) come back with
   `category: null`, not `[]`, and their `product` name has raw `<br>` in it.
   Zero-hit responses null out `products` and the facet lists the same way.
@@ -107,6 +107,58 @@ feedback) tied to a user account.
   variant shares one, and `variant_count` says how many there are.
 - `category_suggestions` comes back empty in practice, even with
   `category_suggestions=1` and `category_suggestions_details=1`.
+- `search_product` caps `total` at 1000; a broad query never reports more.
+- `search_product` ignores `lang` for category labels: hits on the at/de sites
+  are always labelled in German. `query_product` and `bestprice_development`
+  do honour it. `compare_products` spec labels and values are German either
+  way.
+- `query_product_ratings` aggregates (`aggregate_star_rating`,
+  `per_star_rating_count`) always cover every rating; `pagesize` and `sort`
+  only page the review texts.
+- `bestprice_development`'s `best_deep_link` is a ~300 character tracking
+  redirect to the shop, not the product page. `https://geizhals.at/a<id>.html`
+  is the short product link.
+
+## Sort keys
+
+Each endpoint takes its own set, and they fail differently:
+
+| Endpoint | Honoured | Anything else |
+|---|---|---|
+| `search_product` | `""`/`t` relevance, `p` price up, `-p` price down | silently ignored (relevance) |
+| `categorylist` | `t` relevance, `p` / `-p` price, `n` newest listings, `bew` best rated, `-bew` the reverse | 400, except `r`, which sorts by price like `p` |
+
+## Offers
+
+`query_product` returns up to `n_offers` offers, cheapest first:
+
+- `price.value` is the offer price; `shop.merchant_name` is the shop's site
+  name (`alza.at`), `shop.name` the company (`Alza.at GmbH`).
+- `shop.shipping[<loc>]` maps a payment method (`b`, `cc`, `pp`, `pa`, `cod`)
+  to `{shipping_price, shipping_option}`. A negative `shipping_price` is a
+  discount for that payment method (usually prepayment), not a shipping cost.
+  A shop without an entry only sells for pickup.
+- `avl.descr[].text` is the shop's own stock note in German; the first line is
+  mail order, further lines list pickup branches. `avl.best_code` does not map
+  to a stable meaning.
+- `shop.rating.rating` is the shop's rating out of 5 and `shop.rating.count`
+  how many ratings it has. `shop.ratings` uses the inverse 1 (best) to 5 scale.
+- `gtin` on the product is a list of EAN/GTIN codes.
+
+## Sites
+
+`loc` picks the country site, but only `at` and `de` are consistent:
+
+- On `pl` and `uk`, `search_product`'s `prices.best` / `avg` are EUR
+  (`eur_value`) while the offers' `pricing.loc_currency` says PLN/GBP;
+  `categorylist` answers in the local currency, `query_product`'s
+  `bestprices` and `price_history` in PLN/GBP on `pl`. `eu` mixes in values
+  from other sites too.
+- `sk` answers every call with a 400.
+- `bestprice_development` answers 503 for anything but `at` and `de`.
+- `categorylist` rejects `vl: "eu"` with a 400.
+- On the `at` and `de` sites, `hloc` only distinguishes `at` and `de`: `pl` or
+  `uk` alone are ignored (the result equals `[loc]`) and `eu` means both.
 
 ## Categories
 
