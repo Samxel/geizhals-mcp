@@ -680,27 +680,6 @@ async def list_categories(query: Optional[str] = None, limit: int = 40) -> dict:
     return {"count": len(rows), "categories": rows[:limit]}
 
 
-# ---------------------------------------------------------------------------
-# Prompts
-# ---------------------------------------------------------------------------
-@mcp.prompt(title="Check a second-hand listing")
-def check_listing(title: str, price: str) -> str:
-    """Is a second-hand offer a good deal? Matches the ad to Geizhals and weighs
-    its price against what the same model costs new."""
-    return f"""\
-A second-hand listing titled "{title}" asks {price} EUR. Tell me whether that is a good deal.
-
-1. Call match_geizhals with the title. If the best candidate scores below 0.8, or the \
-note says the top candidates are too close, say which models it could be and what in \
-the ad would settle it.
-2. Call get_model_price_range for the model, passing the candidate's category_code. \
-If nothing is on sale any more, use get_product on the candidate for its last known \
-price and get_price_history for how it got there.
-3. Answer with the new price range, how far below the cheapest new offer the listing \
-is in percent, and a short verdict. Mention what a used buyer gives up (warranty, \
-condition) and anything in the title that looks off."""
-
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Geizhals MCP server")
     parser.add_argument("--stdio", action="store_true",

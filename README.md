@@ -262,18 +262,6 @@ both work). The full tree ships with the server in `data/categories.json`.
 
 </details>
 
-### Prompt
-
-<details>
-<summary><code>check_listing(title, price)</code>: is a second-hand offer a good deal?</summary>
-
-Turns a second-hand ad into a ready request: match it with `match_geizhals`,
-price the model new with `get_model_price_range`, and answer how far below the
-cheapest new offer the ad is. Clients that support prompts show it as "Check a
-second-hand listing".
-
-</details>
-
 ## Notes
 
 - `main.py` is the server and its tools. What they build on lives in the
