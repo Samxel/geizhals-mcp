@@ -44,8 +44,11 @@ logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s: %(message)s')
 
 # Country / market: Geizhals runs one API for several country sites. `loc` is the
-# pricing/site, `hloc` the shops to include.
-Country = Literal["at", "de", "eu", "uk", "pl", "sk"]
+# pricing/site, `hloc` the shops to include. Only the Austrian and German sites
+# are offered: on the others the endpoints disagree on currency (search answers
+# in EUR labelled as PLN/GBP, the price history in PLN/GBP), sk answers every
+# call with a 400, and the at/de sites ignore any other shop country in `hloc`.
+Country = Literal["at", "de"]
 
 # Sort keys each endpoint actually honours (checked against the live API).
 # search_product silently ignores anything but relevance and price, so "n" and
@@ -308,10 +311,9 @@ def _clean_html(value):
 
 
 def _site(loc: str) -> str:
-    """The country site the ids/links of a `loc` belong to. Geizhals serves .at,
-    .de, .eu, .co.uk, .pl and .sk from the same catalogue."""
-    return {"at": "geizhals.at", "de": "geizhals.de", "eu": "geizhals.eu",
-            "uk": "skinflint.co.uk", "pl": "geizhals.pl", "sk": "geizhals.sk"}.get(loc, "geizhals.at")
+    """The country site the ids/links of a `loc` belong to. Both serve the same
+    catalogue, so an id from one is valid on the other."""
+    return {"at": "geizhals.at", "de": "geizhals.de"}.get(loc, "geizhals.at")
 
 
 def _best_shop(p: dict) -> Optional[str]:
@@ -571,9 +573,9 @@ async def search_geizhals(
 
     Args:
         query: Free-text search term.
-        loc: Country site the prices are shown for: "at", "de", "eu", "uk",
-            "pl" or "sk". Default "at" (Austria).
-        hloc: Which shop countries' offers to include; defaults to ``[loc]``.
+        loc: Country site the prices are shown for, "at" (default) or "de".
+        hloc: Which shop countries' offers to include; defaults to ``[loc]``,
+            ``["at", "de"]`` takes both.
         lang: Display language for names/labels in the results, "en" (default)
             or "de".
         category: Restrict to a category code, e.g. from a prior call's
@@ -660,8 +662,9 @@ async def get_product(product_id: int, *, loc: Country = "at",
     Args:
         product_id: The Geizhals product id (``gzhid``), e.g. from a search
             hit's ``id`` field.
-        loc: Country site for pricing: "at", "de", "eu", "uk", "pl" or "sk".
-        hloc: Which shop countries' offers to include; defaults to ``[loc]``.
+        loc: Country site for pricing, "at" (default) or "de".
+        hloc: Which shop countries' offers to include; defaults to ``[loc]``,
+            ``["at", "de"]`` takes both.
         lang: Display language for names/labels, "en" (default) or "de".
         n_offers: Max number of individual shop offers to consider for the
             best-price calculation. Default 20.
@@ -716,8 +719,7 @@ async def get_price_history(product_id: int, *, days: int = 31,
         days: History window. Geizhals only serves four fixed windows --
             31, 91, 183 or 365 days (1/3/6/12 months) -- so any other value is
             snapped to the nearest one. Default 31.
-        loc: Country site the prices are shown for: "at", "de", "eu", "uk",
-            "pl" or "sk".
+        loc: Country site the prices are shown for, "at" (default) or "de".
         include_series: Include the per-point ``series`` of
             ``[iso_date, price]`` pairs. Default True; set False for just the
             summary. ``points`` counts the daily observations in the window
@@ -785,8 +787,8 @@ async def get_product_ratings(product_id: int, *, rows: int = 10,
         rows: Max number of underlying reviews Geizhals aggregates over.
             Default 10.
         sort: "latest" (default) or "helpful".
-        loc: Country site the ``reviews_url`` should point at: "at", "de",
-            "eu", "uk", "pl" or "sk". Default "at".
+        loc: Country site the ``reviews_url`` should point at, "at" (default)
+            or "de".
     """
     payload = {
         "product_id": product_id, "filter_ghonly": 0, "offset": 0,
@@ -834,8 +836,9 @@ async def browse_category(category: str, *, loc: Country = "at",
     Args:
         category: The category code from ``list_categories`` or a search hit's
             ``category_code`` / ``facets.categories``.
-        loc: Country site for pricing: "at", "de", "eu", "uk", "pl" or "sk".
-        hloc: Which shop countries' offers to include; defaults to ``[loc]``.
+        loc: Country site for pricing, "at" (default) or "de".
+        hloc: Which shop countries' offers to include; defaults to ``[loc]``,
+            ``["at", "de"]`` takes both.
         lang: Display language for names/labels, "en" (default) or "de".
         sort: "t" (relevance, default), "p" (cheapest first), "-p" (dearest
             first), "n" (newest listings) or "bew" (best rated).
@@ -893,7 +896,7 @@ async def compare_products(product_ids: list[int], *, loc: Country = "at",
     Args:
         product_ids: The Geizhals product ids (``gzhid``) to compare, at most
             10; pass two or more for a meaningful side-by-side.
-        loc: Country site for pricing: "at", "de", "eu", "uk", "pl" or "sk".
+        loc: Country site for pricing, "at" (default) or "de".
         lang: Display language for names/labels, "en" (default) or "de".
     """
     if not 1 <= len(product_ids) <= MAX_COMPARE:
@@ -977,8 +980,9 @@ async def get_deals(
             "price" (cheapest best_price), "latest" (most recently changed),
             "popularity" (most popular products first) or "top" (Geizhals'
             top_deal flag first, biggest drop within that).
-        loc: Country site for pricing: "at", "de", "eu", "uk", "pl" or "sk".
-        hloc: Which shop countries' offers to include; defaults to ``[loc]``.
+        loc: Country site for pricing, "at" (default) or "de".
+        hloc: Which shop countries' offers to include; defaults to ``[loc]``,
+            ``["at", "de"]`` takes both.
         lang: Display language for names/labels, "en" (default) or "de".
         min_discount_percent: Only keep deals that dropped at least this many
             percent, e.g. 15 for "-15% or better". Omit for no floor.
@@ -1173,8 +1177,9 @@ async def get_model_price_range(
         category: Category code to scope to (from ``list_categories`` or a
             search hit's ``category_code``). Omit to have it detected; passing
             it explicitly is one request cheaper and removes the guess.
-        loc: Country site for pricing: "at", "de", "eu", "uk", "pl" or "sk".
-        hloc: Which shop countries' offers to include; defaults to ``[loc]``.
+        loc: Country site for pricing, "at" (default) or "de".
+        hloc: Which shop countries' offers to include; defaults to ``[loc]``,
+            ``["at", "de"]`` takes both.
         max_variants: How many search hits to consider, most relevant first.
             Default 100, which is also the maximum.
     """
@@ -1258,8 +1263,9 @@ async def match_geizhals(
         category: Optional Geizhals category code to scope to (from
             ``list_categories``) -- worth passing when you know the product
             type, it removes most of the wrong-category candidates.
-        loc: Country site for pricing: "at", "de", "eu", "uk", "pl" or "sk".
-        hloc: Which shop countries' offers to include; defaults to ``[loc]``.
+        loc: Country site for pricing, "at" (default) or "de".
+        hloc: Which shop countries' offers to include; defaults to ``[loc]``,
+            ``["at", "de"]`` takes both.
         limit: Max candidates to return, at most 50. Default 5.
     """
     limit = _cap(limit, "limit")

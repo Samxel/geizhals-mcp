@@ -52,6 +52,15 @@ async def test_browse_compare_and_deals(call):
     assert deals["deals"]
 
 
+async def test_german_site_answers_in_euro(call):
+    result = await call("search_geizhals", query="ryzen 7 7800x3d", loc="de", rows=5)
+    priced = [hit for hit in result["results"] if hit["best_price"]]
+    assert priced and all(hit["currency"] == "EUR" for hit in priced)
+    assert priced[0]["url"].startswith("https://geizhals.de/")
+    deals = await call("get_deals", loc="de", limit=3)
+    assert deals["deals"]
+
+
 async def test_sort_keys_take_effect(call):
     dearest = await call("search_geizhals", query="rtx 5070", sort="-p", rows=10)
     prices = [hit["best_price"] for hit in dearest["results"]]
