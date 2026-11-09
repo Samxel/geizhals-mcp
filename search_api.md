@@ -70,7 +70,31 @@ Most methods take a `params` object with:
 | `top_products` / `new_products` / `top_categories` / `hero` | `{params}` | home-screen widgets |
 
 There is also a `/usercontent/v0/*` namespace (price alarms, push settings,
-feedback) tied to a user account.
+feedback), mostly tied to a user account or app device. One part works with
+just an e-mail address:
+
+| Method | Body | Returns |
+|---|---|---|
+| `POST /usercontent/v1/pricealarm/product/<id>` | `{email_address, price_limit, expiry_days, availability, currency, loc, hloc, sizes?, ...}` | `response.message`: `"Pricealarm created !"` or `"... updated !"` |
+
+- It is signed like `gh/v9` and not behind Cloudflare. The website's own route
+  (`geizhals.at/api/usercontent/v1/...`) needs browser cookies.
+- Required: `email_address`, `price_limit`, `expiry_days`, `availability`,
+  `currency`. Anything else missing gives `400 wrong or missing parameters`.
+- `expiry_days` takes 7, 14, 21, 28, 61, 183 and 9999; every other value from
+  1 to 114, and 365, gives a 400. `availability` takes `l` (the website's
+  default) or `k`. `currency` takes `EUR` or `PLN`.
+- The alarm is keyed by e-mail and product: a second POST updates it.
+- The product id is not checked, so an alarm on a made-up id is "created".
+- A new address gets a confirmation mail. Until its link is clicked, another
+  new alarm for that address gives `400 error creating confirmation request for
+  mail, already requested`.
+- A bad address gives `400 not a valid email_address`.
+- `GET` on the same path answers `products: {}` whatever the id. Listing and
+  deleting alarms need the app's `token` / `device_id`.
+- Rapid calls get `429` after about a hundred requests.
+- `query_product`'s `sizechart.sizes[].name` lists the sizes a clothing
+  product comes in, which is what `sizes` takes.
 
 ## Response quirks
 

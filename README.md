@@ -136,8 +136,8 @@ connector**. That way the tools also work in claude.ai and the mobile apps.
 Anyone who finds the URL can use the server too, though, so put
 authentication in front of it.
 
-Every tool is marked read-only, so clients that honour that hint won't ask
-before each call. In Claude Desktop you can also open **Settings > Connectors >
+Every tool but `create_price_alarm` is marked read-only, so clients that
+honour that hint won't ask before each call. In Claude Desktop you can also open **Settings > Connectors >
 geizhals** and set the tools' dropdown on the right to **Always allow**.
 
 ## Tools
@@ -259,6 +259,20 @@ a `note` says so rather than letting a coin-flip look like an answer.
 Browse Geizhals' category tree to find the category codes `browse_category`
 takes. Matches English or German names ("graphics cards" and "grafikkarten"
 both work). The full tree ships with the server in `data/categories.json`.
+
+</details>
+
+<details>
+<summary><code>create_price_alarm(product_id, email, price_limit)</code>: get an e-mail when a product gets cheaper</summary>
+
+Sets a Geizhals price alarm, no account needed: Geizhals e-mails the address
+once the best price drops to `price_limit`. The alarm runs for 61 days. For
+clothing, `sizes` limits it to the sizes `get_product` lists. Calling it again
+for the same address and product updates the alarm. An address's first alarm
+needs a click on Geizhals' confirmation link before it runs, and the alarm is
+cancelled from the link in Geizhals' mails. The instructions tell the AI to
+offer an alarm when a product is well above its low or a sale is close, and to
+ask for the address instead of guessing it.
 
 </details>
 
