@@ -13,6 +13,8 @@ import httpx
 from mcp.server.mcpserver.exceptions import ToolError
 
 BASE_URL = "https://api.geizhals.net/gh/v9"
+# Price alarms live outside gh/v9 but take the same signed requests.
+USERCONTENT_URL = "https://api.geizhals.net/usercontent/v1"
 
 # Host used in the request_fingerprint signing string. Constant across
 # /gh/v9, /usercontent/v0, etc. (only the oauth client uses a different host).
@@ -111,8 +113,9 @@ class UpstreamError(ToolError):
         self.status = status
 
 
-async def post(endpoint: str, payload: dict) -> dict:
-    """POST a signed request to a gh/v9 endpoint, retrying transient failures."""
+async def post(endpoint: str, payload: dict, *, base: str = BASE_URL) -> dict:
+    """POST a signed request to a gh/v9 endpoint (or one under `base`),
+    retrying transient failures."""
     body = json.dumps(payload, separators=(",", ":")).encode()
     headers = {
         "authorization": _auth_header(body),
@@ -121,7 +124,7 @@ async def post(endpoint: str, payload: dict) -> dict:
         "content-type": "application/json",
         "accept-encoding": "gzip",
     }
-    url = f"{BASE_URL}/{endpoint}"
+    url = f"{base}/{endpoint}"
     for attempt in range(MAX_RETRIES + 1):
         try:
             response = await client.post(url, content=body, headers=headers)
@@ -145,7 +148,8 @@ async def post(endpoint: str, payload: dict) -> dict:
                 if response.status_code >= 400:
                     raise UpstreamError(
                         f"Geizhals rejected the '{endpoint}' request (HTTP "
-                        f"{response.status_code}); check the arguments you passed.",
+                        f"{response.status_code}); check the arguments you passed."
+                        f"{_reason(response)}",
                         response.status_code
                     )
                 return response.json()
@@ -153,6 +157,19 @@ async def post(endpoint: str, payload: dict) -> dict:
         logger.warning("Request to '%s' failed (attempt %d/%d), retrying in %.1fs",
                         url, attempt + 1, MAX_RETRIES + 1, delay)
         await asyncio.sleep(delay)
+
+
+def _reason(response: httpx.Response) -> str:
+    """The upstream's own explanation of a 4xx, when it gives a specific one.
+    usercontent answers e.g. "not a valid email_address"; its generic "wrong or
+    missing parameters" and gh/v9's error bodies add nothing, so they are left out."""
+    try:
+        message = (response.json() or {}).get("message")
+    except ValueError:
+        return ""
+    if not isinstance(message, str) or message == "wrong or missing parameters":
+        return ""
+    return f" Geizhals says: {message}."
 
 
 def params(loc: str, hloc: Optional[list[str]], *, lang: str = "en", **extra) -> dict:
@@ -239,3 +256,30 @@ async def all_deals(feed_params: dict) -> tuple[list[dict], Optional[int]]:
                 deals.append(d)
     _deals_cache[key] = (time.monotonic(), deals, pages[0].get("total"))
     return deals, pages[0].get("total")
+
+
+# ---------------------------------------------------------------------------
+# Price alarms
+# ---------------------------------------------------------------------------
+# Geizhals only takes 7, 14, 21, 28, 61 or 183 days; 61 covers the run-up to
+# Black Friday and Christmas, so the tool does not ask.
+ALARM_EXPIRY_DAYS = 61
+
+
+async def set_price_alarm(product_id: int, *, email: str, price_limit: float, loc: str,
+                          sizes: Optional[list[str]]) -> str:
+    """Create, or update in place, the e-mail price alarm of `email` on one
+    product. No account is needed; Geizhals keys the alarm by e-mail and
+    product. Returns "created" or "updated"."""
+    # what the website sends; availability "k" is the only other value accepted
+    payload = {
+        "loc": loc, "hloc": [loc], "currency": "EUR", "availability": "l",
+        "expiry_days": ALARM_EXPIRY_DAYS, "including_delivery": False,
+        "price_limit": price_limit, "marketplaces": 1, "mail_notification": 1,
+        "params": {"lang": "de"}, "email_address": email,
+    }
+    if sizes:
+        payload["sizes"] = sizes
+    data = await post(f"pricealarm/product/{product_id}", payload, base=USERCONTENT_URL)
+    message = str((data.get("response") or {}).get("message") or "")
+    return "created" if "created" in message.lower() else "updated"

@@ -25,8 +25,9 @@ async def test_tool_listing_stays_small():
         tools = (await client.list_tools()).tools
     sizes = {t.name: len(json.dumps(t.model_dump(exclude_none=True, by_alias=True), ensure_ascii=False))
              for t in tools}
-    # was ~21.8k characters before the shared notes moved into the instructions
-    assert sum(sizes.values()) < 14_000, sizes
+    # was ~21.8k characters before the shared notes moved into the instructions;
+    # create_price_alarm added ~0.9k on top of ~13.6k
+    assert sum(sizes.values()) < 14_500, sizes
     assert max(sizes.values()) < 2_500, sizes
 
 

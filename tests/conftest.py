@@ -31,7 +31,7 @@ class FakeAPI:
         self.responses[endpoint] = response
         return self
 
-    async def __call__(self, endpoint, payload):
+    async def __call__(self, endpoint, payload, base=None):
         self.calls.append((endpoint, payload))
         if endpoint not in self.responses:
             raise AssertionError(f"unexpected call to {endpoint}")

@@ -168,6 +168,9 @@ def product(p: dict, site: str = "geizhals.at") -> dict:
         "offers_url": f"https://{site}{urls.get('offers')}" if urls.get("offers") else None,
         "test_reviews": len(p.get("test_reviews") or []),
         "gtin": p.get("gtin") or None,
+        # clothing and shoes: the sizes on offer, which a price alarm can be limited to
+        "sizes": [s["name"] for s in ((p.get("sizechart") or {}).get("sizes") or [])
+                  if isinstance(s, dict) and s.get("name")] or None,
     }
 
 

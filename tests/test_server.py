@@ -13,11 +13,11 @@ pytestmark = pytest.mark.anyio
 MAIN = Path(main.__file__)
 
 
-async def test_tools_are_read_only_and_only_list_categories_is_local():
+async def test_only_the_price_alarm_writes_and_only_list_categories_is_local():
     async with Client(main.mcp) as client:
         tools = (await client.list_tools()).tools
     for tool in tools:
-        assert tool.annotations.read_only_hint is True, tool.name
+        assert tool.annotations.read_only_hint is (tool.name != "create_price_alarm"), tool.name
         assert tool.annotations.open_world_hint is (tool.name != "list_categories"), tool.name
 
 

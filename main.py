@@ -9,7 +9,7 @@ import inspect
 import json
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Literal, Optional
 
 from mcp.server import MCPServer
@@ -54,6 +54,11 @@ temporarily unlisted). Such hits carry their all-time price range, and \
 get_product adds the last known price.
 
 Fields without a value are left out of results.
+
+Price alarms: if a wanted product is well above its all-time low or a sale \
+(Black Friday, Christmas) is near, offer create_price_alarm. Ask for the target \
+price and the user's e-mail, never guess it. Clothing: ask for one of \
+get_product's sizes.
 """
 
 # The tool list only changes with a new release, so clients on the 2026-07-28
@@ -74,10 +79,15 @@ def _prune(value):
     return value
 
 
-# Every tool only reads, so clients can run them without asking each time. All
-# but list_categories, which answers from the shipped tree, go out to Geizhals.
+# Every tool but create_price_alarm only reads, so clients can run them without
+# asking each time. All but list_categories, which answers from the shipped
+# tree, go out to Geizhals.
 ONLINE = ToolAnnotations(readOnlyHint=True, openWorldHint=True)
 LOCAL = ToolAnnotations(readOnlyHint=True, openWorldHint=False)
+# Sets the alarm at Geizhals, so a client asks first. Sending the same alarm
+# again only updates it (keyed by e-mail and product), hence idempotent.
+WRITES = ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True,
+                         openWorldHint=True)
 
 
 def _tool(fn=None, *, annotations: ToolAnnotations = ONLINE):
@@ -678,6 +688,72 @@ async def list_categories(query: Optional[str] = None, limit: int = 40) -> dict:
     limit = _cap(limit, "limit")
     rows = categories.search(query)
     return {"count": len(rows), "categories": rows[:limit]}
+
+
+# Shape check only; Geizhals validates the address itself as well.
+EMAIL = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")
+
+
+@_tool(annotations=WRITES)
+async def create_price_alarm(
+    product_id: int,
+    email: str,
+    price_limit: float,
+    *,
+    loc: Country = "at",
+    sizes: Optional[list[str]] = None,
+) -> dict:
+    """E-mail the user when the best price hits ``price_limit`` (EUR), for 61
+    days. Only after the user agreed. Calling again updates the alarm.
+
+    Args:
+        sizes: Clothing only, from get_product.
+    """
+    email = email.strip()
+    if not EMAIL.fullmatch(email):
+        raise ToolError(f"{email!r} is not an e-mail address; ask the user for theirs.")
+    if price_limit <= 0:
+        raise ToolError(f"price_limit must be above 0 (got {price_limit}).")
+    # Geizhals accepts alarms on ids that do not exist, so look the product up first.
+    payload = {"query": str(product_id), "type": "id", "params": api.params(loc, None, n_offers=1)}
+    response = (await api.post("query_product", payload)).get("response") or []
+    if not response:
+        raise ToolError(f"No product with id {product_id}.")
+    product = summaries.product(response[0], summaries.site_for(loc))
+    if sizes:
+        offered = product.get("sizes") or []
+        unknown = [size for size in sizes if size not in offered]
+        if unknown:
+            raise ToolError(f"Product {product_id} has no size {', '.join(unknown)}; "
+                            + (f"it comes in {', '.join(offered)}." if offered
+                               else "it is not sold by size, so leave sizes out."))
+    try:
+        status = await api.set_price_alarm(product_id, email=email, price_limit=price_limit,
+                                           loc=loc, sizes=sizes)
+    except api.UpstreamError as exc:
+        if "already requested" not in str(exc):
+            raise
+        # an address must confirm its first alarm before Geizhals takes another
+        raise ToolError(f"Geizhals is still waiting for {email} to confirm an earlier alarm. "
+                        f"Ask the user to click the link in that mail, then try again.") from exc
+    best = product["best_price"]
+    result = {
+        "status": status,
+        "name": product["name"],
+        "price_limit": price_limit,
+        "best_price": best,
+        "expires_on": (datetime.now(timezone.utc).date()
+                       + timedelta(days=api.ALARM_EXPIRY_DAYS)).isoformat(),
+    }
+    notes = []
+    if status == "created":
+        notes.append("A new address first gets a confirmation mail; the alarm runs once its link "
+                     "is clicked.")
+    if best is not None and best <= price_limit and not sizes:
+        notes.append("Already at or below the limit; the alarm fires right away.")
+    if notes:
+        result["note"] = " ".join(notes)
+    return result
 
 
 if __name__ == "__main__":
