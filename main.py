@@ -56,8 +56,9 @@ get_product adds the last known price.
 Fields without a value are left out of results.
 
 Price alarms: if a wanted product is well above its all-time low or a sale \
-(Black Friday, Christmas) is near, offer create_price_alarm. Ask for the target \
-price and the user's e-mail, never guess it. Clothing: ask for one of \
+(Black Friday, Christmas) is near, offer create_price_alarm, with an expiry_days \
+that outlasts the sale. Ask for the target price and the user's e-mail, never \
+guess it. Clothing: ask for one of \
 get_product's sizes.
 """
 
@@ -701,10 +702,11 @@ async def create_price_alarm(
     price_limit: float,
     *,
     loc: Country = "at",
+    expiry_days: Literal[7, 14, 21, 28, 61, 183] = 61,
     sizes: Optional[list[str]] = None,
 ) -> dict:
-    """E-mail the user when the best price hits ``price_limit`` (EUR), for 61
-    days. Only after the user agreed. Calling again updates the alarm.
+    """E-mail the user when the best price hits ``price_limit`` (EUR). Only
+    after the user agreed. Calling again updates the alarm.
 
     Args:
         sizes: Clothing only, from get_product.
@@ -729,7 +731,7 @@ async def create_price_alarm(
                                else "it is not sold by size, so leave sizes out."))
     try:
         status = await api.set_price_alarm(product_id, email=email, price_limit=price_limit,
-                                           loc=loc, sizes=sizes)
+                                           loc=loc, expiry_days=expiry_days, sizes=sizes)
     except api.UpstreamError as exc:
         if "already requested" not in str(exc):
             raise
@@ -742,8 +744,7 @@ async def create_price_alarm(
         "name": product["name"],
         "price_limit": price_limit,
         "best_price": best,
-        "expires_on": (datetime.now(timezone.utc).date()
-                       + timedelta(days=api.ALARM_EXPIRY_DAYS)).isoformat(),
+        "expires_on": (datetime.now(timezone.utc).date() + timedelta(days=expiry_days)).isoformat(),
     }
     notes = []
     if status == "created":

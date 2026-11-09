@@ -261,20 +261,15 @@ async def all_deals(feed_params: dict) -> tuple[list[dict], Optional[int]]:
 # ---------------------------------------------------------------------------
 # Price alarms
 # ---------------------------------------------------------------------------
-# Geizhals only takes 7, 14, 21, 28, 61 or 183 days; 61 covers the run-up to
-# Black Friday and Christmas, so the tool does not ask.
-ALARM_EXPIRY_DAYS = 61
-
-
 async def set_price_alarm(product_id: int, *, email: str, price_limit: float, loc: str,
-                          sizes: Optional[list[str]]) -> str:
+                          expiry_days: int, sizes: Optional[list[str]]) -> str:
     """Create, or update in place, the e-mail price alarm of `email` on one
     product. No account is needed; Geizhals keys the alarm by e-mail and
     product. Returns "created" or "updated"."""
     # what the website sends; availability "k" is the only other value accepted
     payload = {
         "loc": loc, "hloc": [loc], "currency": "EUR", "availability": "l",
-        "expiry_days": ALARM_EXPIRY_DAYS, "including_delivery": False,
+        "expiry_days": expiry_days, "including_delivery": False,
         "price_limit": price_limit, "marketplaces": 1, "mail_notification": 1,
         "params": {"lang": "de"}, "email_address": email,
     }

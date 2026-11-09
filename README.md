@@ -263,16 +263,17 @@ both work). The full tree ships with the server in `data/categories.json`.
 </details>
 
 <details>
-<summary><code>create_price_alarm(product_id, email, price_limit)</code>: get an e-mail when a product gets cheaper</summary>
+<summary><code>create_price_alarm(product_id, email, price_limit, expiry_days=61)</code>: get an e-mail when a product gets cheaper</summary>
 
 Sets a Geizhals price alarm, no account needed: Geizhals e-mails the address
-once the best price drops to `price_limit`. The alarm runs for 61 days. For
+once the best price drops to `price_limit`. The alarm runs for `expiry_days`:
+7, 14, 21, 28, 61 (default) or 183, the only values Geizhals takes. For
 clothing, `sizes` limits it to the sizes `get_product` lists. Calling it again
 for the same address and product updates the alarm. An address's first alarm
 needs a click on Geizhals' confirmation link before it runs, and the alarm is
 cancelled from the link in Geizhals' mails. The instructions tell the AI to
-offer an alarm when a product is well above its low or a sale is close, and to
-ask for the address instead of guessing it.
+offer an alarm when a product is well above its low or a sale is close, long
+enough to outlast the sale, and to ask for the address instead of guessing it.
 
 </details>
 

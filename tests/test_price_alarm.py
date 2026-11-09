@@ -22,9 +22,9 @@ def leggings(api):
 
 async def test_sets_the_alarm_with_what_the_website_sends(leggings, call):
     result = await call("create_price_alarm", product_id=3767985, email=" me@example.com ",
-                        price_limit=49.5, sizes=["L"])
+                        price_limit=49.5, sizes=["L"], expiry_days=14)
     sent = leggings.sent(ALARM)[0]
-    assert (sent["email_address"], sent["price_limit"], sent["expiry_days"]) == ("me@example.com", 49.5, 61)
+    assert (sent["email_address"], sent["price_limit"], sent["expiry_days"]) == ("me@example.com", 49.5, 14)
     assert (sent["sizes"], sent["hloc"], sent["availability"]) == (["L"], ["at"], "l")
     assert result["status"] == "created"
     assert result["best_price"] == 64.99
@@ -35,6 +35,7 @@ async def test_a_second_call_reports_an_update_and_a_met_limit(leggings, call):
     leggings.on(ALARM, {"response": {"message": "Pricealarm updated !", "success": 1}})
     result = await call("create_price_alarm", product_id=3767985, email="me@example.com", price_limit=70)
     assert result["status"] == "updated"
+    assert leggings.sent(ALARM)[0]["expiry_days"] == 61
     assert "fires right away" in result["note"]
     assert "sizes" not in leggings.sent(ALARM)[0]
 
