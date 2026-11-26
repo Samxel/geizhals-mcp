@@ -329,14 +329,14 @@ enough to outlast the sale, and to ask for the address instead of guessing it.
   `pl`) the endpoints disagree on currency, `sk` rejects every call, and the
   at/de sites ignore shops from other countries anyway.
 - Releases: bump `version` in `pyproject.toml` and `manifest.json`, then push a
-  tag such as `v1.1` (a `.0` patch may be left off, so `v1.1` releases 1.1.0). The release workflow runs the tests, builds the wheel,
-  the sdist and the `.mcpb` bundle and attaches them to a GitHub release.
+  tag such as `v1.1`. A `.0` patch may be left off the tag, so `v1.1` releases
+  1.1.0. The release workflow runs the tests, builds the wheel, the sdist and
+  the `.mcpb` bundle and attaches them to a GitHub release.
 - The badges above read `coverage.json` from the `coverage` branch.
   `scripts/update_coverage.py` refreshes it from the Geizhals homepage, and a
   daily GitHub Action commits any change to that branch, so the refresh stays
   out of `main`'s history.
 - API details are documented in [`search_api.md`](search_api.md).
-- This uses Geizhals' internal mobile API, not an official one. Be nice to it.
 
 ## Disclaimer
 
@@ -344,10 +344,12 @@ This is an independent, unofficial project and is not affiliated with, endorsed
 by, or connected to Geizhals. "Geizhals" and all related trademarks belong to
 their respective owners.
 
-It's published for educational and research purposes only. It talks to Geizhals'
-internal API, which is not meant for public use and may break or change at any
-time. You are responsible for how you use it: respect Geizhals' Terms of Service,
-robots rules and applicable law, and don't hammer their servers.
+It uses an unofficial interface of the Geizhals app, which can change or go
+away at any time. You are responsible for how you use it: respect Geizhals'
+Terms of Service and applicable law, and don't hammer their servers.
+
+If you're a rights holder and have a concern about this repository, please open
+an issue and I'll respond promptly.
 
 ## License
 

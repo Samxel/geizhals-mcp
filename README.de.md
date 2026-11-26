@@ -35,10 +35,10 @@ Preisverlauf, Bewertungen und Kategorien. Er nutzt die API der Geizhals-App
   Den **kompletten Preisverlauf** und die **aktuellen Preissenkungen** (Schnäppchen) abrufen, gefiltert nach Kategorie und danach, wie viele Shops sie führen, und direkt aus dem Chat einen **Geizhals-Preisalarm per E-Mail** setzen. So beantwortet ein Modell „ist das gerade günstig oder soll ich warten“.
 
 - **Vom Suchbegriff zur Kategorie**  
-  Per Freitext suchen oder den **kompletten Geizhals-Kategoriebaum** (über 2200 Kategorien, liegen dem Server bei) durchgehen, um genau das richtige Segment zu treffen, und dann eine Auswahl nebeneinander vergleichen.
+  Per Freitext suchen oder den **kompletten Geizhals-Kategoriebaum** (über 2200 Kategorien, direkt im Server enthalten) durchgehen, um genau das richtige Segment zu treffen, und dann eine Auswahl nebeneinander vergleichen.
 
 - **Gebrauchtangebote einschätzen**  
-  `match_geizhals` findet das Geizhals-Produkt hinter einer Gebrauchtanzeige (mit Konfidenzwert), und `get_model_price_range` zeigt, was dieses Modell neu über alle Varianten kostet. Zusammen beantworten sie „ist dieses Gebrauchtangebot ein guter Deal?“.
+  `match_geizhals` findet das Geizhals-Produkt hinter einer Gebrauchtanzeige (mit einem Wert dafür, wie sicher der Treffer ist), und `get_model_price_range` zeigt, was dieses Modell neu über alle Varianten kostet. Zusammen beantworten sie „ist dieses Gebrauchtangebot ein guter Deal?“.
 
 ## Einrichtung
 
@@ -120,8 +120,8 @@ HTTPS-URL unter **Settings > Connectors > Add custom connector** ein. Dann kann
 aber jeder, der die URL kennt, den Server nutzen, also stell eine
 Authentifizierung davor.
 
-Alle Tools außer `create_price_alarm` sind als nur lesend markiert, Clients,
-die das beachten, fragen also nicht vor jedem Aufruf nach. In Claude Desktop
+Alle Tools außer `create_price_alarm` sind als rein lesend markiert. Clients,
+die das beachten, fragen deshalb nicht vor jedem Aufruf nach. In Claude Desktop
 kannst du außerdem unter **Settings > Connectors > geizhals** das Dropdown
 rechts bei den Tools auf **Always allow** stellen.
 
@@ -179,8 +179,8 @@ Produkte per Suchbegriff finden, mit Filtern für Kategorie und Hersteller,
 Sortierung und Blättern (`rows` standardmäßig 5, höchstens 50). Jeder Treffer
 bringt seinen aktuellen `best_price`, `avg_price`, `offer_count`, `currency`,
 den günstigsten `shop`, `rating_*`, `category_code` und ein `available`-Flag
-mit, eine einfache Preis- oder Bewertungsfrage braucht also keinen weiteren
-Aufruf. Treffer ohne aktuelle Angebote bekommen `alltime_price_min` /
+mit. Eine einfache Frage nach Preis oder Bewertung braucht also keinen
+weiteren Aufruf. Treffer ohne aktuelle Angebote bekommen `alltime_price_min` /
 `alltime_price_max` / `alltime_last_date` dazu, damit auch ausgelaufene
 Produkte einen Preis haben, ohne einen Aufruf pro Treffer. Die Facetten nennen
 die zehn größten Kategorien (mit Namen) und Hersteller, um die Suche damit
@@ -195,11 +195,11 @@ verfügbare Produkte aus `results` und aus `total` heraus.
 </details>
 
 <details>
-<summary><code>get_product(product_id, n_offers=5)</code>: ein Produkt vollständig, mit den günstigsten Shops</summary>
+<summary><code>get_product(product_id, n_offers=5)</code>: ein Produkt mit allen Details und den günstigsten Shops</summary>
 
 Alle Details zu einem Produkt: aktueller Bestpreis und Zahl der Angebote, Name,
-Kategorie, Bewertung, Bilder, GTIN, Angebotslink, Preisspanne über die ganze
-Zeit und Zahl der Testberichte. `offers` listet die günstigsten Shops mit
+Kategorie, Bewertung, Bilder, GTIN, Angebotslink, bisherige Preisspanne und
+Zahl der Testberichte. `offers` listet die günstigsten Shops mit
 Preis, günstigstem Versand, Gesamtpreis, dem Lagertext des Shops und seiner
 Bewertung. Bei einem Produkt ohne aktuelle Angebote werden `last_known_price` /
 `last_known_date` ergänzt. Bei Kleidung stehen die `sizes` dabei.
@@ -244,7 +244,7 @@ Kategorie (die der Suchfacette ist es nicht).
 
 Bis zu zehn Produkte nebeneinander vergleichen, inklusive Datenblatt.
 Eigenschaften, die auf ein Produkt nicht zutreffen, fallen weg, statt leer
-dazustehen, und das Datenblatt ist auf Deutsch, weil Geizhals es nur so hat.
+dazustehen. Das Datenblatt ist auf Deutsch, weil Geizhals es nur so liefert.
 Ausgelaufene Produkte bringen ihren letzten bekannten Preis mit.
 
 </details>
@@ -253,8 +253,8 @@ Ausgelaufene Produkte bringen ihren letzten bekannten Preis mit.
 <summary><code>get_deals(sort="percent", ...)</code>: aktuelle Preissenkungen auflisten</summary>
 
 Aktuelle Preissenkungen: Produkte, deren Bestpreis gerade gefallen ist, mit
-Prozent und Betrag der Senkung. Sortiert nach größter Senkung in `percent`,
-`price`, `latest`, `popularity` oder `top`-Deals, gefiltert mit:
+Prozent und Betrag der Senkung. Sortierbar nach `percent` (größte Senkung),
+`price`, `latest`, `popularity` oder `top` (Top-Deals zuerst), filterbar mit:
 - `min_discount_percent` und `max_price`
 - `min_offer_count`: Eine Senkung bei nur einem oder zwei Shops ist oft ein
   Preisfehler oder ein Abverkauf eines einzelnen Shops; ab 3 fällt das meiste
@@ -331,7 +331,7 @@ und nach der Adresse zu fragen, statt sie zu raten.
   `geizhals`: `api.py` signiert und verschickt die Anfragen, `summaries.py`
   macht aus den Rohdaten Ergebnisse, `matching.py` gleicht Anzeigentitel und
   Modelle ab, und `categories.py` liest den Kategoriebaum.
-- `geizhals/data/categories.json` ist ein Abzug des Geizhals-Kategoriebaums
+- `geizhals/data/categories.json` ist eine Kopie des Geizhals-Kategoriebaums
   (title, title_de, id, children). `list_categories` gleicht Anfragen mit den
   englischen und den deutschen Namen ab.
 - Was alle Tools gemeinsam haben (mit welchem Tool man anfängt, was
@@ -346,30 +346,32 @@ und nach der Adresse zu fragen, statt sie zu raten.
   `sk` lehnt jeden Aufruf ab, und die Seiten at/de ignorieren Shops aus anderen
   Ländern ohnehin.
 - Releases: `version` in `pyproject.toml` und `manifest.json` erhöhen, dann
-  einen Tag wie `v1.1` pushen (eine Patch-Stelle `.0` darf fehlen, `v1.1` veröffentlicht also 1.1.0). Der Release-Workflow lässt die Tests laufen,
-  baut Wheel, sdist und das `.mcpb`-Bundle und hängt sie an ein GitHub-Release.
-- Die Badges oben lesen `coverage.json` aus dem Branch `coverage`.
+  einen Tag wie `v1.1` pushen. Eine Patch-Version `.0` kann man im Tag
+  weglassen, `v1.1` veröffentlicht also 1.1.0. Der Release-Workflow lässt die
+  Tests laufen, baut Wheel, sdist und das `.mcpb`-Bundle und hängt sie an ein
+  GitHub-Release.
+- Die Badges oben holen ihre Zahlen aus `coverage.json` im Branch `coverage`.
   `scripts/update_coverage.py` aktualisiert die Datei von der
   Geizhals-Startseite, und eine tägliche GitHub Action committet Änderungen in
   diesen Branch, damit die Historie von `main` sauber bleibt.
 - Die API ist in [`search_api.md`](search_api.md) dokumentiert (auf Englisch).
-- Das hier nutzt die interne App-API von Geizhals, keine offizielle.
-  Geh pfleglich damit um.
 
 ## Haftungsausschluss
 
-Das ist ein unabhängiges, inoffizielles Projekt und steht in keiner Verbindung
-zu Geizhals, wird von Geizhals weder unterstützt noch empfohlen. „Geizhals“
-und alle zugehörigen Marken gehören ihren jeweiligen Inhabern.
+Das ist ein unabhängiges, inoffizielles Projekt ohne Verbindung zu Geizhals;
+Geizhals unterstützt oder empfiehlt es nicht. „Geizhals“ und alle zugehörigen
+Marken gehören ihren jeweiligen Inhabern.
 
-Es wird nur zu Lern- und Forschungszwecken veröffentlicht. Es spricht mit der
-internen API von Geizhals, die nicht für die Öffentlichkeit gedacht ist und
-sich jederzeit ändern oder wegfallen kann. Du bist dafür verantwortlich, wie
-du es nutzt: Halte dich an die Nutzungsbedingungen von Geizhals, die
-Robots-Regeln und geltendes Recht, und überlaste die Server nicht.
+Es nutzt eine inoffizielle Schnittstelle der Geizhals-App, die sich jederzeit
+ändern oder wegfallen kann. Du bist dafür verantwortlich, wie du es nutzt:
+Halte dich an die Nutzungsbedingungen von Geizhals sowie an geltendes Recht
+und überlaste die Server nicht.
+
+Falls du Rechteinhaber bist und Bedenken zu diesem Repository hast, eröffne
+bitte ein Issue, ich melde mich umgehend.
 
 ## Lizenz
 
-[`MIT LICENSE`](LICENSE). Bereitgestellt „wie besehen“, ohne Gewährleistung.
+[`MIT LICENSE`](LICENSE). Ohne Gewähr.
 
 <p align="center"><sub><a href="README.md">Read this in English</a></sub></p>
