@@ -1,6 +1,6 @@
 <h1 align="center">geizhals-mcp</h1>
 
-<p align="center"><sub>From the same series: <a href="https://github.com/Samxel/kleinanzeigen-mcp">kleinanzeigen-mcp</a> · <a href="https://github.com/Samxel/willhaben-mcp">willhaben-mcp</a></sub></p>
+<p align="center"><sub>From the same series: <a href="https://github.com/Samxel/kleinanzeigen-mcp">kleinanzeigen-mcp</a> · <a href="https://github.com/Samxel/willhaben-mcp">willhaben-mcp</a> · <a href="https://github.com/Samxel/rabatt-mcp">rabatt-mcp</a></sub></p>
 
 An MCP server that lets an AI search [Geizhals](https://geizhals.at) price
 comparison data: products, best prices, price history, ratings and categories.

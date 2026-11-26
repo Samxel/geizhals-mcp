@@ -1,6 +1,6 @@
 <h1 align="center">geizhals-mcp</h1>
 
-<p align="center"><sub>Aus derselben Reihe: <a href="https://github.com/Samxel/kleinanzeigen-mcp">kleinanzeigen-mcp</a> · <a href="https://github.com/Samxel/willhaben-mcp">willhaben-mcp</a></sub></p>
+<p align="center"><sub>Aus derselben Reihe: <a href="https://github.com/Samxel/kleinanzeigen-mcp">kleinanzeigen-mcp</a> · <a href="https://github.com/Samxel/willhaben-mcp">willhaben-mcp</a> · <a href="https://github.com/Samxel/rabatt-mcp">rabatt-mcp</a></sub></p>
 
 Ein MCP-Server, mit dem eine KI die Preisvergleichsdaten von
 [Geizhals](https://geizhals.at) durchsuchen kann: Produkte, Bestpreise,
