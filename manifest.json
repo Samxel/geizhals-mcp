@@ -1,0 +1,40 @@
+{
+  "manifest_version": "0.4",
+  "name": "geizhals-mcp",
+  "display_name": "Geizhals",
+  "version": "1.0.0",
+  "description": "Search Geizhals price comparison: best prices across shops, price history, deals and price alarms.",
+  "long_description": "Products, best prices with the cheapest shops, price history, ratings, the full category tree, current price drops and e-mail price alarms from geizhals.at and geizhals.de. Also finds the Geizhals product behind a second-hand ad. Unofficial; uses Geizhals' mobile app API.",
+  "author": { "name": "Samxel", "url": "https://github.com/Samxel" },
+  "repository": { "type": "git", "url": "https://github.com/Samxel/geizhals-mcp" },
+  "homepage": "https://github.com/Samxel/geizhals-mcp",
+  "support": "https://github.com/Samxel/geizhals-mcp/issues",
+  "server": {
+    "type": "uv",
+    "entry_point": "main.py",
+    "mcp_config": {
+      "command": "uv",
+      "args": ["run", "--directory", "${__dirname}", "main.py", "--stdio"]
+    }
+  },
+  "tools": [
+    { "name": "search_geizhals", "description": "Search products by keyword, with live prices" },
+    { "name": "get_product", "description": "One product in full, with its cheapest shops" },
+    { "name": "get_price_history", "description": "How the price moved over time" },
+    { "name": "get_product_ratings", "description": "A product's user ratings" },
+    { "name": "browse_category", "description": "The products of one category" },
+    { "name": "compare_products", "description": "Products side by side, with specs" },
+    { "name": "get_deals", "description": "Current price drops" },
+    { "name": "get_model_price_range", "description": "What a model costs across all its variants" },
+    { "name": "match_geizhals", "description": "Which product a second-hand ad is about" },
+    { "name": "list_categories", "description": "Category codes by name" },
+    { "name": "create_price_alarm", "description": "An e-mail from Geizhals when a product gets cheaper" }
+  ],
+  "keywords": ["geizhals", "price comparison", "preisvergleich", "shopping"],
+  "license": "MIT",
+  "privacy_policies": ["https://unternehmen.geizhals.at/datenschutz/"],
+  "compatibility": {
+    "platforms": ["darwin", "win32", "linux"],
+    "runtimes": { "python": ">=3.10" }
+  }
+}
