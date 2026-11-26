@@ -518,6 +518,8 @@ async def get_deals(
     lang: Literal["en", "de"] = "en",
     min_discount_percent: Optional[float] = None,
     max_price: Optional[float] = None,
+    min_offer_count: Optional[int] = None,
+    category: Optional[str] = None,
     limit: int = 10,
     offset: int = 0,
 ) -> dict:
@@ -535,6 +537,11 @@ async def get_deals(
             "latest", "popularity" or "top" (top deals first).
         min_discount_percent: Keep drops of at least this many percent.
         max_price: Keep deals with a ``best_price`` of at most this.
+        min_offer_count: Keep deals offered by at least this many shops. A
+            drop at one or two shops is often a pricing error or a single
+            shop's stock clearance; 3 or more filters most of that out.
+        category: A category code ("gra16_512") or a name anywhere in the
+            category path, English or German ("Hardware", "Grafikkarten").
         limit: Deals to return, at most 50. Default 10.
         offset: Skip this many matches, to page on. Default 0.
     """
@@ -552,6 +559,10 @@ async def get_deals(
         deals = [d for d in deals if (d.get("change_percent") or 0) <= floor]
     if max_price is not None:
         deals = [d for d in deals if d["best_price"] is not None and d["best_price"] <= max_price]
+    if min_offer_count is not None:
+        deals = [d for d in deals if (d.get("offer_count") or 0) >= min_offer_count]
+    if category:
+        deals = [d for d in deals if categories.in_category(d.get("category_code"), d.get("category"), category)]
 
     if sort == "percent":
         deals.sort(key=lambda d: d["change_percent"] if d["change_percent"] is not None else 0)

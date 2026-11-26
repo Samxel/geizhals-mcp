@@ -53,13 +53,14 @@ def search_response(hits, *, total=None, categories=None, manufacturers=None):
     }}
 
 
-def deal(gzhid, *, percent, best, old=None, top=False, rank=100, ts=1793100000, alltime=False):
+def deal(gzhid, *, percent, best, old=None, top=False, rank=100, ts=1793100000, alltime=False, offers=5,
+         cat="gra16_512", path="Hardware > Graphics Cards > PCIe"):
     return {
         "id": gzhid,
         "product": f"Product {gzhid}",
         "manufacturer_name": "Brand",
-        "category_path": "Hardware > Graphics Cards > PCIe",
-        "cat": "gra16_512",
+        "category_path": path,
+        "cat": cat,
         "change_in_percent": percent,
         "change_in_local": round(best - (old or best), 2),
         "old_price": old,
@@ -67,7 +68,7 @@ def deal(gzhid, *, percent, best, old=None, top=False, rank=100, ts=1793100000, 
         "alltime_best": int(alltime),
         "top_deal": int(top),
         "rank": rank,
-        "offer_count": 5,
+        "offer_count": offers,
         "hname": "Amazon.at",
         "timestamp": ts,
         "image_thumb": f"https://gzhls.at/pix/{gzhid}-n.webp",

@@ -55,6 +55,19 @@ async def test_get_deals_filters_and_sorts_locally(api, call):
     assert result["top_deal_count"] == 1
 
 
+async def test_get_deals_by_category_and_offer_count(api, call):
+    api.on("bestprice_development", {"response": {"total": 3, "deals": [
+        deal(1, percent=-76.0, best=150.0, old=640.0, offers=2,
+             cat="htoaster", path="Home & Living > Small Kitchen Appliances > Toasters"),
+        deal(2, percent=-20.0, best=80.0, old=100.0, offers=12),
+        deal(3, percent=-30.0, best=70.0, old=100.0, offers=1),
+    ]}})
+    assert [d["id"] for d in (await call("get_deals", min_offer_count=3))["deals"]] == [2]
+    for category in ("gra16_512", "Hardware", "grafikkarten"):
+        assert [d["id"] for d in (await call("get_deals", category=category))["deals"]] == [3, 2], category
+    assert [d["id"] for d in (await call("get_deals", category="Toaster"))["deals"]] == [1]
+
+
 async def test_browse_category_normalizes_hits(api, call):
     api.on("categorylist", {"response": {"total": 1322, "price_range": {"min": 20.0, "max": 599.99},
                                           "products": [category_hit(5, "Bosch WAN28127", best=467.0,

@@ -82,3 +82,14 @@ def search(query: Optional[str], lang: str = "en") -> list[dict]:
     return [{"code": code, "path": path_de if lang == "de" else path}
             for code, path, path_de in canonical
             if not q or q in _norm(path) or q in _norm(path_de)]
+
+
+def in_category(code: Optional[str], label: Optional[str], wanted: str) -> bool:
+    """Whether a product of category `code` (with the API's own path `label`)
+    falls under `wanted`: that exact code, or a name anywhere in its English or
+    German path, so a top level such as "Hardware" (which has no code) works."""
+    if code and code == wanted.strip():
+        return True
+    q = _norm(wanted)
+    paths = [label or ""] + [" / ".join(CATEGORY_PATH[lang].get(code or "", [])) for lang in ("en", "de")]
+    return bool(q) and any(q in _norm(p) for p in paths)
