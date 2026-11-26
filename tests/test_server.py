@@ -6,11 +6,11 @@ from pathlib import Path
 import pytest
 from mcp import Client, StdioServerParameters
 
-import main
+from geizhals import server as main
 
 pytestmark = pytest.mark.anyio
 
-MAIN = Path(main.__file__)
+MAIN = Path(__file__).resolve().parent.parent / "main.py"
 
 
 async def test_only_the_price_alarm_writes_and_only_list_categories_is_local():

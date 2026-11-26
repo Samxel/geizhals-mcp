@@ -2,7 +2,7 @@
 
 import pytest
 
-import main
+from geizhals import server as main
 
 pytestmark = pytest.mark.anyio
 

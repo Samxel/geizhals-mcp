@@ -2,7 +2,7 @@
 
 import pytest
 
-import main
+from geizhals import server as main
 from conftest import ToolFailed
 from samples import search_hit, search_response
 

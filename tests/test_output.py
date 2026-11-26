@@ -3,7 +3,7 @@
 import pytest
 from mcp import Client
 
-import main
+from geizhals import server as main
 from samples import search_hit, search_response
 
 pytestmark = pytest.mark.anyio

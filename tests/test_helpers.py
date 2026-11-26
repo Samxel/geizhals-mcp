@@ -1,6 +1,6 @@
 """Pure helpers: paging, text cleanup, title matching and price maths."""
 
-import main
+from geizhals import server as main
 from geizhals import api, matching, summaries
 
 

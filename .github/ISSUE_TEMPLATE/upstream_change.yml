@@ -39,4 +39,4 @@ body:
     attributes:
       label: Data
       options:
-        - label: This probably needs the bundled data (data/) to be re-crawled
+        - label: This probably needs the bundled data (geizhals/data/) to be re-crawled

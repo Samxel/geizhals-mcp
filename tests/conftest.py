@@ -10,7 +10,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import geizhals.api  # noqa: E402
-import main  # noqa: E402
+from geizhals import server as main  # noqa: E402
 from mcp import Client  # noqa: E402
 
 
