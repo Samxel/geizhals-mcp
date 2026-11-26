@@ -18,11 +18,12 @@ def gpu_search(api):
     return api
 
 
-async def test_search_hits_and_facets_follow_lang(gpu_search, call):
+async def test_search_facets_follow_lang(gpu_search, call):
     english = await call("search_geizhals", query="rtx 5070")
     german = await call("search_geizhals", query="rtx 5070", lang="de")
-    assert english["results"][0]["category"] == ["Hardware", "Graphics Cards", "PCIe"]
-    assert german["results"][0]["category"] == ["Hardware", "Grafikkarten", "PCIe"]
+    # hits carry only the code; the facets name it
+    assert "category" not in english["results"][0]
+    assert english["results"][0]["category_code"] == "gra16_512"
     english_facets = {c["id"]: c["name"] for c in english["facets"]["categories"]}
     german_facets = {c["id"]: c["name"] for c in german["facets"]["categories"]}
     assert english_facets["sysnn"] == "Miscellaneous Systems"
@@ -31,11 +32,10 @@ async def test_search_hits_and_facets_follow_lang(gpu_search, call):
     assert english_facets["unknown_code"] == "Unbekannt"
 
 
-async def test_uncategorised_hits_keep_an_empty_path(api, call):
+async def test_uncategorised_hits_carry_no_code(api, call):
     api.on("search_product", search_response(
         [search_hit(2, "MIFCOM Gaming PC", best=2449.0, offers=1, cat=None)]))
     hit = (await call("search_geizhals", query="mifcom"))["results"][0]
-    assert hit["category"] == []
     assert "category_code" not in hit
 
 
@@ -44,5 +44,14 @@ async def test_browse_names_its_category_in_lang(api, call):
         "total": 1, "products": [category_hit(5, "Bosch WAN28127", best=467.0)]}})
     english = await call("browse_category", category="hwaschf")
     german = await call("browse_category", category="hwaschf", lang="de")
-    assert english["results"][0]["category"][-1] == "Washing Machines"
-    assert german["results"][0]["category"][-1] == "Waschmaschinen"
+    assert english["category"][-1] == "Washing Machines"
+    assert german["category"][-1] == "Waschmaschinen"
+    assert "category" not in english["results"][0]
+
+
+async def test_list_categories_gives_the_path_in_lang():
+    from conftest import call_tool
+    english = await call_tool("list_categories", query="waschmaschinen")
+    german = await call_tool("list_categories", query="washing machines", lang="de")
+    assert english["categories"][0] == {"code": "hwaschf", "path": "Home & Living / Washing & Drying / Washing Machines"}
+    assert german["categories"][0]["path"].endswith("Waschmaschinen")

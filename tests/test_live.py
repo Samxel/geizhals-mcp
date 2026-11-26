@@ -66,16 +66,16 @@ async def test_german_site_answers_in_euro(call):
     result = await call("search_geizhals", query="ryzen 7 7800x3d", loc="de", rows=5)
     priced = [hit for hit in result["results"] if hit["best_price"]]
     assert priced and all(hit["currency"] == "EUR" for hit in priced)
-    assert priced[0]["url"].startswith("https://geizhals.de/")
     deals = await call("get_deals", loc="de", limit=3)
     assert deals["deals"]
 
 
 async def test_lang_names_categories(call):
-    english = await call("search_geizhals", query="ryzen 7 7800x3d", rows=1)
-    german = await call("search_geizhals", query="ryzen 7 7800x3d", rows=1, lang="de")
-    assert english["results"][0]["category"][1] == "Processors (CPUs)"
-    assert german["results"][0]["category"][1] == "Prozessoren (CPUs)"
+    code = (await call("search_geizhals", query="ryzen 7 7800x3d", rows=1))["results"][0]["category_code"]
+    english = await call("browse_category", category=code, rows=1)
+    german = await call("browse_category", category=code, rows=1, lang="de")
+    assert english["category"][1] == "Processors (CPUs)"
+    assert german["category"][1] == "Prozessoren (CPUs)"
 
 
 async def test_sort_keys_take_effect(call):

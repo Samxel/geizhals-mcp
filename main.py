@@ -53,7 +53,8 @@ available: false means a product has no live offers right now (discontinued or \
 temporarily unlisted). Such hits carry their all-time price range, and \
 get_product adds the last known price.
 
-Fields without a value are left out of results.
+Fields without a value are left out of results. Hits carry no link: a \
+product's page is https://geizhals.at/a{id}.html (geizhals.de for loc "de").
 
 Price alarms: if a wanted product is well above its all-time low or a sale \
 (Black Friday, Christmas) is near, offer create_price_alarm, with an expiry_days \
@@ -205,14 +206,13 @@ async def search_geizhals(
     # every list below can come back as an explicit null (no hits, uncategorised
     # hits, no facets), so `or []` rather than a dict default
     facets = data.get("facet_aggregates") or {}
-    site = summaries.site_for(loc)
     # Geizhals reports the facet's price floor as 0 whatever the hits cost, so
     # null it rather than pass off a meaningless number as the cheapest hit.
     price_range = facets.get("price_range") or {}
     price_range = {"min": price_range.get("min") or None, "max": price_range.get("max") or None}
     return {
         "total": data.get("total"),
-        "results": [summaries.search_hit(p, site, lang) for p in (data.get("products") or [])[:rows]],
+        "results": [summaries.search_hit(p) for p in (data.get("products") or [])[:rows]],
         "facets": {
             "categories": [{"id": c.get("id"),
                             "name": (CATEGORY_PATH[lang].get(c.get("id") or "") or [c.get("name")])[-1],
@@ -446,11 +446,13 @@ async def browse_category(category: str, *, loc: Country = "at",
     data = response.get("response") or {}
     products = data.get("productlist") or data.get("products") or []
     return {
-        "category": category,
+        # named once here rather than on every hit, which all share it
+        "category_code": category,
+        "category": CATEGORY_PATH[lang].get(category),
         "total": data.get("total"),
         # unlike the search facet, this one is real
         "price_range": data.get("price_range"),
-        "results": [summaries.category_hit(p, category, lang)
+        "results": [summaries.category_hit(p, category)
                     for p in products[:rows] if isinstance(p, dict)],
     }
 
@@ -541,7 +543,7 @@ async def get_deals(
         raise ToolError(f"offset must not be negative (got {offset}).")
     raw, total = await api.all_deals(api.params(loc, hloc, lang=lang, limit=api.DEALS_PAGE_SIZE,
                                                 price_range=1))
-    deals = [summaries.deal(d, summaries.site_for(loc)) for d in raw]
+    deals = [summaries.deal(d) for d in raw]
     scanned = len(deals)
     top_deal_count = sum(1 for d in deals if d["top_deal"])
 
@@ -568,7 +570,7 @@ async def get_deals(
     return {"count": len(deals), "matched": matched, "scanned": scanned,
             "total_available": total, "top_deal_count": top_deal_count,
             "next_offset": offset + limit if offset + limit < matched else None,
-            "deals": deals}
+            "deals": [summaries.deal_out(d) for d in deals]}
 
 
 @_tool
@@ -600,7 +602,6 @@ async def get_model_price_range(
             maximum 300.
     """
     max_variants = max(1, min(int(max_variants), 300))
-    site = summaries.site_for(loc)
     wanted = set(matching.title_tokens(model))
     if not wanted:
         raise ToolError(f"Nothing searchable in the model name {model!r}.")
@@ -614,7 +615,7 @@ async def get_model_price_range(
     # an "iPhone 16 Pro" price sort is 60 cheaper iPhones and no 16 Pro at all.
     data = await api.search_products(model, loc=loc, hloc=hloc, lang="en", category=category,
                                   sort="", rows=max_variants)
-    hits = [summaries.search_hit(p, site) for p in (data.get("products") or [])[:max_variants]]
+    hits = [summaries.search_hit(p) for p in (data.get("products") or [])[:max_variants]]
     variants = matching.model_variants(hits, wanted)
     prices = [h["best_price"] for h in variants if h["available"] and h["best_price"] is not None]
     cheapest = sorted((h for h in variants if h["available"]), key=lambda h: h["best_price"])
@@ -679,7 +680,6 @@ async def match_geizhals(
         raise ToolError(f"Nothing searchable left in the title {title!r} once the ad words are dropped.")
     # long ad titles are mostly prose; the leading words carry the product
     query = " ".join(tokens[:8])
-    site = summaries.site_for(loc)
     data = await api.search_products(query, loc=loc, hloc=hloc, lang="en", category=category, rows=30)
     products = data.get("products") or []
     if not products and len(tokens) > 4:  # too specific -- retry on the head of the title
@@ -689,7 +689,7 @@ async def match_geizhals(
 
     wanted = set(tokens)
     candidates = []
-    for hit in (summaries.search_hit(p, site) for p in products):
+    for hit in (summaries.search_hit(p) for p in products):
         score = matching.match_score(wanted, hit["name"] or "")
         if not hit["category_code"]:
             score = round(score * matching.UNCATEGORISED_FACTOR, 3)
@@ -711,18 +711,19 @@ async def match_geizhals(
 
 
 @_tool(annotations=LOCAL)
-async def list_categories(query: Optional[str] = None, limit: int = 40) -> dict:
+async def list_categories(query: Optional[str] = None, *, lang: Literal["en", "de"] = "en",
+                          limit: int = 40) -> dict:
     """Look up category codes by name, for ``browse_category`` and the
     ``category`` filter of ``search_geizhals``. Matches English and German
     names ("graphics cards", "grafikkarten") anywhere in the category path and
-    returns ``{count, categories: [{code, name, name_de, path}]}``.
+    returns ``{count, categories: [{code, path}]}``.
 
     Args:
         query: Case- and accent-insensitive substring. Omit to list all.
         limit: At most 50. Default 40.
     """
     limit = _cap(limit, "limit")
-    rows = categories.search(query)
+    rows = categories.search(query, lang)
     return {"count": len(rows), "categories": rows[:limit]}
 
 

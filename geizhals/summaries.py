@@ -96,8 +96,7 @@ def _currency(p: dict) -> Optional[str]:
     return None
 
 
-def search_hit(p: dict, site: str = "geizhals.at", lang: str = "en") -> dict:
-    urls = p.get("urls") or {}
+def search_hit(p: dict) -> dict:
     prices = p.get("prices") or {}
     best_price = to_float(prices.get("best"))
     offer_count = p.get("offer_count")
@@ -107,9 +106,8 @@ def search_hit(p: dict, site: str = "geizhals.at", lang: str = "en") -> dict:
         "variant_id": p.get("variant_id"),
         "name": clean_html(p.get("product") or p.get("product_for_sort")),
         "manufacturer": p.get("manufacturer_name"),
-        # uncategorised hits (Amazon passthrough listings) carry category: null
-        "category": (CATEGORY_PATH[lang].get(_leaf_cat(p.get("category")) or "")
-                     or [c.get("label") for c in (p.get("category") or []) if isinstance(c, dict)]),
+        # uncategorised hits (Amazon passthrough listings) carry category: null;
+        # the name of a code is in the facets or list_categories
         "category_code": _leaf_cat(p.get("category")),
         "best_price": best_price,
         "avg_price": to_float(prices.get("avg")),
@@ -119,7 +117,6 @@ def search_hit(p: dict, site: str = "geizhals.at", lang: str = "en") -> dict:
         "shop": _best_shop(p),
         "rating_stars": p.get("rating_stars"),
         "rating_count": p.get("rating_count"),
-        "url": f"https://{site}{urls.get('overview')}" if urls.get("overview") else None,
         "mpn": p.get("mpn"),
         "listed_since": (p.get("listed_since") or "")[:10] or None,
     }
@@ -199,7 +196,9 @@ def offer(o: dict, loc: str) -> dict:
     }
 
 
-def deal(d: dict, site: str = "geizhals.at") -> dict:
+def deal(d: dict) -> dict:
+    """One price drop. ``rank`` is only there to sort by popularity; the page
+    sent out drops it, see ``deal_out``."""
     return {
         "id": d.get("id"),
         "name": clean_html(d.get("product")),
@@ -210,21 +209,23 @@ def deal(d: dict, site: str = "geizhals.at") -> dict:
         "change_amount": d.get("change_in_local"),
         "old_price": d.get("old_price"),
         "best_price": d.get("best_price"),
-        "alltime_best": bool(d.get("alltime_best")),
-        "top_deal": bool(d.get("top_deal")),
+        # set only when true; a false flag on every deal is noise
+        "alltime_best": True if d.get("alltime_best") else None,
+        "top_deal": True if d.get("top_deal") else None,
         "rank": d.get("rank"),
         "offer_count": d.get("offer_count"),
         "rating_stars": d.get("rating_stars"),
         "rating_count": d.get("rating_count"),
         "shop": d.get("hname"),
         "changed_at": _iso_minute(d.get("timestamp")),
-        # best_deep_link is a 300-character tracking redirect to the shop; the
-        # product page is what an answer links to, and its short form is enough
-        "url": f"https://{site}/a{d['id']}.html" if d.get("id") else None,
     }
 
 
-def category_hit(p: dict, category: Optional[str] = None, lang: str = "en") -> dict:
+def deal_out(d: dict) -> dict:
+    return {k: v for k, v in d.items() if k != "rank"}
+
+
+def category_hit(p: dict, category: Optional[str] = None) -> dict:
     """Normalize a categorylist product into the same shape ``search_geizhals``
     returns (categorylist ships raw, inconsistent fields otherwise), so code
     that reads either source sees the same keys."""
@@ -236,8 +237,6 @@ def category_hit(p: dict, category: Optional[str] = None, lang: str = "en") -> d
         "id": p.get("id"),
         "variant_id": p.get("variant_id"),
         "name": clean_html(p.get("product_for_sort") or p.get("product")),
-        # every hit of a category listing is in that category by definition
-        "category": CATEGORY_PATH[lang].get(category or ""),
         "category_code": category,
         "best_price": best_price,
         "currency": pricing.get("loc_currency"),
@@ -246,8 +245,6 @@ def category_hit(p: dict, category: Optional[str] = None, lang: str = "en") -> d
         "shop": p.get("best_merch_name"),
         "rating_stars": p.get("rating_stars"),
         "rating_count": p.get("rating_count"),
-        # product_link carries the listing's own ?vl=..&hloc=.. query
-        "url": (p.get("product_link") or "").split("?")[0] or None,
         "mpn": p.get("mpn"),
     }
 

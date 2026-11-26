@@ -39,7 +39,7 @@ UNCATEGORISED_FACTOR = 0.6
 # What a match needs to be acted on; the rest of a search hit is a get_product
 # call away once the right candidate is known.
 CANDIDATE_FIELDS = {"id", "name", "category_code", "best_price", "offer_count", "available", "shop",
-                    "url", "alltime_price_min", "alltime_price_max", "alltime_last_date"}
+                    "alltime_price_min", "alltime_price_max", "alltime_last_date"}
 
 
 def title_tokens(text: str) -> list[str]:
@@ -114,7 +114,7 @@ async def detect_category(model: str, wanted: set, *, loc: str, hloc) -> Optiona
     borrowing a model's name to sell an accessory is cheaper than the model.
     """
     data = await api.search_products(model, loc=loc, hloc=hloc, lang="en", sort="", rows=30)
-    hits = [summaries.search_hit(p, summaries.site_for(loc)) for p in (data.get("products") or [])]
+    hits = [summaries.search_hit(p) for p in (data.get("products") or [])]
     scored = [(match_score(wanted, h["name"] or ""), h)
               for h in model_variants(hits, wanted) if h["category_code"]]
     if not scored:

@@ -65,9 +65,9 @@ def _category_paths() -> dict[str, dict[str, list[str]]]:
 CATEGORY_PATH = _category_paths()
 
 
-def search(query: Optional[str]) -> list[dict]:
+def search(query: Optional[str], lang: str = "en") -> list[dict]:
     """Every browseable category whose English or German path contains `query`
-    (all of them without one), each code once."""
+    (all of them without one), each code once, with its path in `lang`."""
     flat: list = []
     _walk_categories(_CATEGORIES, [], [], flat)
     seen: set = set()
@@ -77,8 +77,8 @@ def search(query: Optional[str]) -> list[dict]:
         if not code or code in seen:
             continue
         seen.add(code)
-        canonical.append((code, node.get("title"), node.get("title_de"), path, path_de))
+        canonical.append((code, path, path_de))
     q = _norm(query) if query else None
-    return [{"code": code, "name": name, "name_de": name_de, "path": path}
-            for code, name, name_de, path, path_de in canonical
+    return [{"code": code, "path": path_de if lang == "de" else path}
+            for code, path, path_de in canonical
             if not q or q in _norm(path) or q in _norm(path_de)]

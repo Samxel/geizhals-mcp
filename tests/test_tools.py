@@ -62,7 +62,8 @@ async def test_browse_category_normalizes_hits(api, call):
     result = await call("browse_category", category="hwaschf", price_max=600)
     hit = result["results"][0]
     assert hit["best_price"] == 467.0
-    assert hit["category"] == ["Home & Living", "Washing & Drying", "Washing Machines"]
+    assert result["category"] == ["Home & Living", "Washing & Drying", "Washing Machines"]
+    assert (result["category_code"], hit["category_code"]) == ("hwaschf", "hwaschf")
     assert result["price_range"] == {"min": 20.0, "max": 599.99}
 
 
