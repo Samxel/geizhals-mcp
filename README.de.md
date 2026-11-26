@@ -348,7 +348,7 @@ und nach der Adresse zu fragen, statt sie zu raten.
   `sk` lehnt jeden Aufruf ab, und die Seiten at/de ignorieren Shops aus anderen
   Ländern ohnehin.
 - Releases: `version` in `pyproject.toml` und `manifest.json` erhöhen, dann
-  einen Tag wie `v1.0.1` pushen. Der Release-Workflow lässt die Tests laufen,
+  einen Tag wie `v1.1` pushen (eine Patch-Stelle `.0` darf fehlen, `v1.1` veröffentlicht also 1.1.0). Der Release-Workflow lässt die Tests laufen,
   baut Wheel, sdist und das `.mcpb`-Bundle und hängt sie an ein GitHub-Release.
 - Die Badges oben lesen `coverage.json` aus dem Branch `coverage`.
   `scripts/update_coverage.py` aktualisiert die Datei von der
