@@ -19,7 +19,6 @@ important fields to the AI.
   <a href="#add-it-to-claude-and-other-mcp-clients">Add to Claude</a> ·
   <a href="#run-it-yourself">Run</a> ·
   <a href="#tools">Tools</a> ·
-  <a href="#notes">Notes</a> ·
   <a href="#disclaimer">Disclaimer</a> ·
   <a href="#license">License</a>
 </p>
@@ -308,35 +307,6 @@ offer an alarm when a product is well above its low or a sale is close, long
 enough to outlast the sale, and to ask for the address instead of guessing it.
 
 </details>
-
-## Notes
-
-- `geizhals/server.py` is the server and its tools; `main.py` only starts it
-  from a checkout. What the tools build on lives next to it in the `geizhals`
-  package: `api.py` signs and sends the requests, `summaries.py` turns the raw
-  records into results, `matching.py` matches ad titles and models, and
-  `categories.py` reads the category tree.
-- `geizhals/data/categories.json` is a snapshot of Geizhals' category tree
-  (title, title_de, id, children). `list_categories` matches queries against
-  both the English and German names.
-- What all tools share (which tool to start with, what `loc`/`hloc`/`lang`
-  mean, `id` vs `variant_id`, how a link is built) is sent once as the server's
-  instructions instead of being repeated in every tool description. Tool
-  schemas leave out the titles and `null` branches pydantic would add, and
-  results go out as compact JSON. All of it keeps what the model reads on every
-  turn small.
-- Only the Austrian and German sites are offered. On the others (`eu`, `uk`,
-  `pl`) the endpoints disagree on currency, `sk` rejects every call, and the
-  at/de sites ignore shops from other countries anyway.
-- Releases: bump `version` in `pyproject.toml` and `manifest.json`, then push a
-  tag such as `v1.1`. A `.0` patch may be left off the tag, so `v1.1` releases
-  1.1.0. The release workflow runs the tests, builds the wheel, the sdist and
-  the `.mcpb` bundle and attaches them to a GitHub release.
-- The badges above read `coverage.json` from the `coverage` branch.
-  `scripts/update_coverage.py` refreshes it from the Geizhals homepage, and a
-  daily GitHub Action commits any change to that branch, so the refresh stays
-  out of `main`'s history.
-- API details are documented in [`search_api.md`](search_api.md).
 
 ## Disclaimer
 

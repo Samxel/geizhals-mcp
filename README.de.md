@@ -19,7 +19,6 @@ Preisverlauf, Bewertungen und Kategorien. Er nutzt die API der Geizhals-App
   <a href="#in-claude-einbinden-und-andere-mcp-clients">In Claude einbinden</a> ·
   <a href="#selbst-starten">Starten</a> ·
   <a href="#tools">Tools</a> ·
-  <a href="#hinweise">Hinweise</a> ·
   <a href="#haftungsausschluss">Haftungsausschluss</a> ·
   <a href="#lizenz">Lizenz</a>
 </p>
@@ -323,38 +322,6 @@ liegt oder ein Sale bevorsteht, mit einer Laufzeit, die den Sale überdauert,
 und nach der Adresse zu fragen, statt sie zu raten.
 
 </details>
-
-## Hinweise
-
-- `geizhals/server.py` ist der Server mit seinen Tools; `main.py` startet ihn
-  nur aus einem Klon heraus. Worauf die Tools aufbauen, liegt daneben im Paket
-  `geizhals`: `api.py` signiert und verschickt die Anfragen, `summaries.py`
-  macht aus den Rohdaten Ergebnisse, `matching.py` gleicht Anzeigentitel und
-  Modelle ab, und `categories.py` liest den Kategoriebaum.
-- `geizhals/data/categories.json` ist eine Kopie des Geizhals-Kategoriebaums
-  (title, title_de, id, children). `list_categories` gleicht Anfragen mit den
-  englischen und den deutschen Namen ab.
-- Was alle Tools gemeinsam haben (mit welchem Tool man anfängt, was
-  `loc`/`hloc`/`lang` bedeuten, `id` gegenüber `variant_id`, wie ein Link
-  entsteht), wird einmal als Server-Anweisung geschickt, statt in jeder
-  Tool-Beschreibung zu stehen. Die Tool-Schemas lassen die Titel und
-  `null`-Zweige weg, die pydantic sonst einfügt, und Ergebnisse gehen als
-  kompaktes JSON raus. All das hält klein, was das Modell in jedem Schritt
-  lesen muss.
-- Angeboten werden nur die österreichische und die deutsche Seite. Bei den
-  anderen (`eu`, `uk`, `pl`) sind sich die Endpunkte bei der Währung uneinig,
-  `sk` lehnt jeden Aufruf ab, und die Seiten at/de ignorieren Shops aus anderen
-  Ländern ohnehin.
-- Releases: `version` in `pyproject.toml` und `manifest.json` erhöhen, dann
-  einen Tag wie `v1.1` pushen. Eine Patch-Version `.0` kann man im Tag
-  weglassen, `v1.1` veröffentlicht also 1.1.0. Der Release-Workflow lässt die
-  Tests laufen, baut Wheel, sdist und das `.mcpb`-Bundle und hängt sie an ein
-  GitHub-Release.
-- Die Badges oben holen ihre Zahlen aus `coverage.json` im Branch `coverage`.
-  `scripts/update_coverage.py` aktualisiert die Datei von der
-  Geizhals-Startseite, und eine tägliche GitHub Action committet Änderungen in
-  diesen Branch, damit die Historie von `main` sauber bleibt.
-- Die API ist in [`search_api.md`](search_api.md) dokumentiert (auf Englisch).
 
 ## Haftungsausschluss
 
