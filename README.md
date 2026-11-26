@@ -1,5 +1,7 @@
 <h1 align="center">geizhals-mcp</h1>
 
+<p align="center"><sub>From the same series: <a href="https://github.com/Samxel/kleinanzeigen-mcp">kleinanzeigen-mcp</a> · <a href="https://github.com/Samxel/willhaben-mcp">willhaben-mcp</a></sub></p>
+
 An MCP server that lets an AI search [Geizhals](https://geizhals.at) price
 comparison data: products, best prices, price history, ratings and categories.
 It wraps the Geizhals mobile app's API (`api.geizhals.net/gh/v9`) and returns the
@@ -14,8 +16,8 @@ important fields to the AI.
 <p align="center">
   <a href="#highlights">Highlights</a> ·
   <a href="#setup">Setup</a> ·
-  <a href="#run">Run</a> ·
   <a href="#add-it-to-claude-and-other-mcp-clients">Add to Claude</a> ·
+  <a href="#run-it-yourself">Run</a> ·
   <a href="#tools">Tools</a> ·
   <a href="#notes">Notes</a> ·
   <a href="#tests">Tests</a> ·
@@ -24,13 +26,15 @@ important fields to the AI.
   <a href="#license">License</a>
 </p>
 
+<p align="center"><sub><a href="README.de.md">Diese Anleitung auf Deutsch</a></sub></p>
+
 ## Highlights
 
 - **Best price across every shop**  
   Find a product and get its **best price, the cheapest shops with shipping and stock, full price range, star ratings and test-review count**, aggregated over all Geizhals merchants instead of a single listing.
 
 - **Know when to buy**  
-  Pull the **full price history** and the **current price drops** (Schnäppchen), sortable by biggest percent off, so a model can answer "is this cheap right now or should I wait".
+  Pull the **full price history** and the **current price drops** (Schnäppchen), filtered by category and by how many shops carry them, and set a **Geizhals e-mail price alarm** right from the chat, so a model can answer "is this cheap right now or should I wait".
 
 - **From keyword to category**  
   Search by free text or browse the **complete Geizhals category tree** (2200+ categories shipped with the server) to drill into exactly the right segment, then compare a shortlist side by side.
@@ -40,105 +44,122 @@ important fields to the AI.
 
 ## Setup
 
-Requires Python 3.10+.
+Pick one of three ways. All of them need nothing running in the background:
+the client starts the server when it needs it.
+
+**Claude Desktop, no terminal.** Download `geizhals-mcp.mcpb` from the
+[latest release](https://github.com/Samxel/geizhals-mcp/releases/latest) and
+double-click it. Claude Desktop shows an install dialog and sets up the
+dependencies itself. Done; skip the rest of this section.
+
+**With [uv](https://docs.astral.sh/uv/), no clone.** One command runs the
+current version straight from GitHub:
 
 ```bash
+uvx --from git+https://github.com/Samxel/geizhals-mcp geizhals-mcp --stdio
+```
+
+**From a clone.** Requires Python 3.10+.
+
+```bash
+git clone https://github.com/Samxel/geizhals-mcp
+cd geizhals-mcp
 pip install -r requirements.txt
+python main.py --stdio
 ```
 
-With [uv](https://docs.astral.sh/uv/) you can skip this step: `main.py`
-declares its own dependencies, so `uv run main.py` installs them on the fly.
-
-## Run
-
-```bash
-python main.py
-```
-
-The server starts over streamable HTTP and prints where it's listening:
-
-```
-Starting geizhals-mcp server on http://127.0.0.1:8000/mcp
-```
-
-Point your MCP client at that URL. Host, port and path live at the top of
-`main.py`.
-
-For clients that start the server themselves, `python main.py --stdio` speaks
-MCP over stdin/stdout instead. Nothing has to run in the background then.
+`uv run main.py --stdio` also works without the `pip install`: `main.py`
+declares its own dependencies.
 
 ## Add it to Claude (and other MCP clients)
 
-Clients that start their own servers use the stdio mode. Clients that connect
-to a URL need `python main.py` running and take the URL it printed on startup.
-
 ### Claude Code
 
-One command, no config file. Claude Code starts the server itself:
+One command, no config file:
+
+```bash
+claude mcp add geizhals -- uvx --from git+https://github.com/Samxel/geizhals-mcp geizhals-mcp --stdio
+```
+
+From a clone, point it at `main.py` instead:
 
 ```bash
 claude mcp add geizhals -- python /path/to/geizhals-mcp/main.py --stdio
-```
-
-Or connect to a server you already started with `python main.py`:
-
-```bash
-claude mcp add --transport http geizhals http://127.0.0.1:8000/mcp
 ```
 
 Add `--scope user` to have it in every project instead of only the current one.
 `claude mcp list` shows whether the connection came up, `claude mcp remove
 geizhals` takes it out again.
 
-### Cursor, Codex, VS Code and other JSON-config clients
-
-Same URL, in the client's MCP config:
-
-```json
-{
-  "mcpServers": {
-    "geizhals": {
-      "type": "http",
-      "url": "http://127.0.0.1:8000/mcp"
-    }
-  }
-}
-```
-
 ### Claude Desktop
 
-Custom connectors (**Settings > Connectors**) connect from Anthropic's cloud,
-so they cannot reach a server running only on your own machine. Two ways
-around it:
-
-**Let Claude Desktop start it over stdio.** Open **Settings > Developer > Edit
-Config**, add the `geizhals` entry to `claude_desktop_config.json` and restart
-Claude Desktop:
+The `.mcpb` from [Setup](#setup) is the easiest way. Without it, open
+**Settings > Developer > Edit Config**, add the `geizhals` entry to
+`claude_desktop_config.json` and restart Claude Desktop:
 
 ```json
 {
   "mcpServers": {
     "geizhals": {
-      "command": "python",
-      "args": ["C:\\path\\to\\geizhals-mcp\\main.py", "--stdio"]
+      "command": "uvx",
+      "args": ["--from", "git+https://github.com/Samxel/geizhals-mcp", "geizhals-mcp", "--stdio"]
     }
   }
 }
 ```
 
-Use the full path to `main.py` (forward slashes on macOS/Linux). With uv
-installed, `"command": "uv"` and `"args": ["run", "/path/to/geizhals-mcp/main.py",
-"--stdio"]` also takes care of the dependencies.
+From a clone, use `"command": "python"` and `"args":
+["C:\\path\\to\\geizhals-mcp\\main.py", "--stdio"]` (the full path to
+`main.py`, forward slashes on macOS/Linux).
 
-**Or expose the server** (cloudflared, ngrok, or run it on a box with a public
-hostname) and add that HTTPS URL under **Settings > Connectors > Add custom
-connector**. That way the tools also work in claude.ai and the mobile apps.
-Anyone who finds the URL can use the server too, though, so put
+Custom connectors (**Settings > Connectors**) connect from Anthropic's cloud,
+so they cannot reach a server running only on your own machine. To use the
+tools in claude.ai and the mobile apps, expose the HTTP server (see [Run it
+yourself](#run-it-yourself)) through cloudflared, ngrok or a box with a public
+hostname, and add that HTTPS URL under **Settings > Connectors > Add custom
+connector**. Anyone who finds the URL can use the server too, though, so put
 authentication in front of it.
 
 Every tool but `create_price_alarm` is marked read-only, so clients that
-honour that hint won't ask before each call. In Claude Desktop you can also open **Settings > Connectors >
-geizhals** and set the tools' dropdown on the right to **Always allow**.
+honour that hint won't ask before each call. In Claude Desktop you can also
+open **Settings > Connectors > geizhals** and set the tools' dropdown on the
+right to **Always allow**.
+
+### Cursor, Codex, VS Code and other JSON-config clients
+
+The same entry as for Claude Desktop, in the client's MCP config:
+
+```json
+{
+  "mcpServers": {
+    "geizhals": {
+      "command": "uvx",
+      "args": ["--from", "git+https://github.com/Samxel/geizhals-mcp", "geizhals-mcp", "--stdio"]
+    }
+  }
+}
+```
+
+Clients that connect to a URL instead take `"type": "http"` and `"url":
+"http://127.0.0.1:8000/mcp"`, with the server started as below.
+
+## Run it yourself
+
+Without `--stdio`, the server starts over streamable HTTP and prints where it's
+listening:
+
+```bash
+python main.py
+```
+
+```
+Starting geizhals-mcp server on http://127.0.0.1:8000/mcp
+```
+
+Point your client at that URL, e.g. `claude mcp add --transport http geizhals
+http://127.0.0.1:8000/mcp`. Host, port and path live at the top of
+`geizhals/server.py`. Installed with pip or uv, the `geizhals-mcp` command and
+`python -m geizhals` do the same as `python main.py`.
 
 ## Tools
 
@@ -146,18 +167,22 @@ Most tools take three shared parameters: `loc` is the country site,
 `"at"` (default) or `"de"`; `hloc` lists the shop countries to include and
 defaults to `[loc]`; `lang` (`"en"` or `"de"`) sets the language of category
 names. Results come as compact JSON, and fields without a value are left out.
+Hits carry no link of their own: a product's page is
+`https://geizhals.at/a{id}.html` (`geizhals.de` for `loc="de"`), which the
+server instructions tell the AI once instead of repeating it in every hit.
 
 <details>
 <summary><code>search_geizhals(query, ...)</code>: search products by keyword, with live prices</summary>
 
 Search products by keyword, with filters for category and manufacturer, sorting
-and paging (`rows` up to 50). Every hit carries its current `best_price`,
-`avg_price`, `offer_count`, `currency`, cheapest `shop`, `rating_*` and an
-`available` flag, so a plain price-or-rating question needs no follow-up call.
-Hits with no live offers add `alltime_price_min` / `alltime_price_max` /
-`alltime_last_date`, so even discontinued products come with a price, without
-a call per hit. The facets list the ten largest categories and manufacturers,
-to narrow the search with.
+and paging (`rows` 5 by default, up to 50). Every hit carries its current
+`best_price`, `avg_price`, `offer_count`, `currency`, cheapest `shop`,
+`rating_*`, `category_code` and an `available` flag, so a plain
+price-or-rating question needs no follow-up call. Hits with no live offers add
+`alltime_price_min` / `alltime_price_max` / `alltime_last_date`, so even
+discontinued products come with a price, without a call per hit. The facets
+list the ten largest categories (with their names) and manufacturers, to narrow
+the search with.
 
 `sort` takes `""` (relevance), `"p"` (cheapest first) or `"-p"` (most expensive first);
 Geizhals has no newest or rating order for a search. A price sort narrows the
@@ -173,7 +198,7 @@ Full detail of one product: current best price and offer count, name, category,
 rating, images, GTIN, offer link, all-time price range and test-review count.
 `offers` lists the cheapest shops with price, cheapest shipping, total, the
 shop's own stock text and its rating. A product with no live offers gets its
-`last_known_price` / `last_known_date` filled in.
+`last_known_price` / `last_known_date` filled in. Clothing lists its `sizes`.
 
 </details>
 
@@ -198,10 +223,11 @@ Average rating, totals, per-star counts and the reviews link.
 <summary><code>browse_category(category, ...)</code>: list the products of one category</summary>
 
 List the products in a category by its code, with price bounds, paging (`rows`
-up to 50) and sorting: `"t"` (relevance), `"p"` / `"-p"` (price up or down),
-`"n"` (newest listings) or `"bew"` (best rated). Hits use the same field names
-as `search_geizhals`, and the `price_range` returned alongside them is the
-category's real one (the search facet's is not).
+10 by default, up to 50) and sorting: `"t"` (relevance), `"p"` / `"-p"` (price
+up or down), `"n"` (newest listings) or `"bew"` (best rated). Hits use the same
+field names as `search_geizhals`. The category is named once at the top of the
+result rather than in every hit, and the `price_range` returned alongside is
+the category's real one (the search facet's is not).
 
 </details>
 
@@ -219,12 +245,19 @@ last known price.
 <summary><code>get_deals(sort="percent", ...)</code>: list current price drops</summary>
 
 Current price drops: products whose best price just fell, with the percent and
-amount off and a link to the product page. Sort by biggest `percent` drop,
-`price`, `latest`, `popularity` or `top` deals, and filter with
-`min_discount_percent` / `max_price`. Filters and sorting work over every
-current drop (about a thousand), and `limit` (up to 50) is how many matches come
-back. `next_offset` fetches the next page; the feed is cached for two minutes,
-so further pages come back instantly.
+amount off. Sort by biggest `percent` drop, `price`, `latest`, `popularity` or
+`top` deals, and filter with:
+- `min_discount_percent` and `max_price`
+- `min_offer_count`: a drop at one or two shops is often a pricing error or one
+  shop's clearance; 3 or more filters most of that out
+- `category`: a category code (`"gra16_512"`) or a name anywhere in the
+  category path, English or German (`"Hardware"`, `"Grafikkarten"`)
+
+Filters and sorting work over every current drop (about two thousand), and
+`limit` (10 by default, up to 50) is how many matches come back. The
+`alltime_best` and `top_deal` flags only appear on the deals they apply to.
+`next_offset` fetches the next page; the feed is cached for two minutes, so
+further pages come back instantly.
 
 </details>
 
@@ -254,11 +287,12 @@ a `note` says so rather than letting a coin-flip look like an answer.
 </details>
 
 <details>
-<summary><code>list_categories(query)</code>: look up category codes by name</summary>
+<summary><code>list_categories(query, lang="en")</code>: look up category codes by name</summary>
 
 Browse Geizhals' category tree to find the category codes `browse_category`
 takes. Matches English or German names ("graphics cards" and "grafikkarten"
-both work). The full tree ships with the server in `data/categories.json`.
+both work) and returns each code with its path in `lang`. The full tree ships
+with the server in `geizhals/data/categories.json`.
 
 </details>
 
@@ -279,31 +313,37 @@ enough to outlast the sale, and to ask for the address instead of guessing it.
 
 ## Notes
 
-- `main.py` is the server and its tools. What they build on lives in the
-  `geizhals` package: `api.py` signs and sends the requests, `summaries.py`
-  turns the raw records into results, `matching.py` matches ad titles and
-  models, and `categories.py` reads the category tree.
-- `data/categories.json` is a snapshot of Geizhals' category tree (title,
-  title_de, id, children). `geizhals/categories.py` loads it for
-  `list_categories`, which matches queries against both the English and German
-  names.
+- `geizhals/server.py` is the server and its tools; `main.py` only starts it
+  from a checkout. What the tools build on lives next to it in the `geizhals`
+  package: `api.py` signs and sends the requests, `summaries.py` turns the raw
+  records into results, `matching.py` matches ad titles and models, and
+  `categories.py` reads the category tree.
+- `geizhals/data/categories.json` is a snapshot of Geizhals' category tree
+  (title, title_de, id, children). `list_categories` matches queries against
+  both the English and German names.
+- What all tools share (which tool to start with, what `loc`/`hloc`/`lang`
+  mean, `id` vs `variant_id`, how a link is built) is sent once as the server's
+  instructions instead of being repeated in every tool description. Tool
+  schemas leave out the titles and `null` branches pydantic would add, and
+  results go out as compact JSON. All of it keeps what the model reads on every
+  turn small.
+- Only the Austrian and German sites are offered. On the others (`eu`, `uk`,
+  `pl`) the endpoints disagree on currency, `sk` rejects every call, and the
+  at/de sites ignore shops from other countries anyway.
+- Releases: bump `version` in `pyproject.toml` and `manifest.json`, then push a
+  tag such as `v1.0.1`. The release workflow runs the tests, builds the wheel,
+  the sdist and the `.mcpb` bundle and attaches them to a GitHub release.
 - The badges above read `coverage.json` from the `coverage` branch.
   `scripts/update_coverage.py` refreshes it from the Geizhals homepage, and a
   daily GitHub Action commits any change to that branch, so the refresh stays
   out of `main`'s history.
-- Only the Austrian and German sites are offered. On the others (`eu`, `uk`,
-  `pl`) the endpoints disagree on currency, `sk` rejects every call, and the
-  at/de sites ignore shops from other countries anyway.
-- What all tools share (which tool to start with, what `loc`/`hloc`/`lang`
-  mean, `id` vs `variant_id`) is sent once as the server's instructions
-  instead of being repeated in every tool description.
 - API details are documented in [`search_api.md`](search_api.md).
 - This uses Geizhals' internal mobile API, not an official one. Be nice to it.
 
 ## Tests
 
 ```bash
-pip install pytest
+pip install -r requirements.txt pytest
 pytest
 ```
 
@@ -331,6 +371,11 @@ error, so the model sees what went wrong instead of an internal URL.
 **`could not answer ... (HTTP 503)`** — the request was fine but Geizhals did
 not answer, even after two retries. That is on their side; try again later.
 
+**`uvx` or `uv` not found** — install [uv](https://docs.astral.sh/uv/getting-started/installation/),
+or use the clone route with plain Python. GUI apps such as Claude Desktop may
+not see a `uv` installed only in your shell's `PATH`; give the full path
+(`which uvx`, `where uvx` on Windows) as `"command"` then.
+
 ## Disclaimer
 
 This is an independent, unofficial project and is not affiliated with, endorsed
@@ -345,3 +390,5 @@ robots rules and applicable law, and don't hammer their servers.
 ## License
 
 [`MIT LICENSE`](LICENSE). Provided "as is", without warranty.
+
+<p align="center"><sub><a href="README.de.md">Diese Anleitung auf Deutsch</a></sub></p>

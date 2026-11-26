@@ -523,7 +523,7 @@ async def get_deals(
     ``change_percent`` (negative means cheaper), ``change_amount``,
     ``old_price``, ``best_price`` and the ``alltime_best`` / ``top_deal`` flags.
 
-    Every current drop (about a thousand) is scanned, then filtered and
+    Every current drop (about two thousand) is scanned, then filtered and
     sorted here. ``scanned`` is how many that were, ``matched`` how many passed
     the filters and ``top_deal_count`` how many of all drops are top deals.
     While more matches are left, ``next_offset`` says where the next page starts.
