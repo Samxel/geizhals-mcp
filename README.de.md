@@ -20,8 +20,6 @@ Preisverlauf, Bewertungen und Kategorien. Er nutzt die API der Geizhals-App
   <a href="#selbst-starten">Starten</a> ·
   <a href="#tools">Tools</a> ·
   <a href="#hinweise">Hinweise</a> ·
-  <a href="#tests">Tests</a> ·
-  <a href="#fehlerbehebung">Fehlerbehebung</a> ·
   <a href="#haftungsausschluss">Haftungsausschluss</a> ·
   <a href="#lizenz">Lizenz</a>
 </p>
@@ -357,46 +355,6 @@ und nach der Adresse zu fragen, statt sie zu raten.
 - Die API ist in [`search_api.md`](search_api.md) dokumentiert (auf Englisch).
 - Das hier nutzt die interne App-API von Geizhals, keine offizielle.
   Geh pfleglich damit um.
-
-## Tests
-
-```bash
-pip install -r requirements.txt pytest
-pytest
-```
-
-Die Tests laufen offline gegen vorbereitete API-Antworten und gehen durch
-einen echten MCP-Client, stdio-Transport eingeschlossen. `GEIZHALS_LIVE=1
-pytest` fügt Kurztests gegen die echte API hinzu. Die CI lässt die
-Offline-Tests bei jedem Push laufen und die Live-Tests einmal am Tag; dabei
-fällt auf, wenn Geizhals sein Signatur-Secret wechselt.
-
-## Fehlerbehebung
-
-**`403 invalid request_fingerprint in payload`**: Das HMAC-Secret oder das
-Signaturverfahren in `geizhals/api.py` (`GH_HMAC_SECRET`, `request_fingerprint`,
-`API_HOST`) passt nicht mehr zu dem, was die aktuelle Geizhals-App schickt. Es
-ist aus der App nachgebaut und fest eingetragen und kann deshalb abweichen,
-sobald Geizhals das Secret oder das Fingerprint-Verfahren ändert.
-
-**`400 Bad Request`**: Geizhals prüft einige Parameter gegen feste Wertelisten
-und lehnt alles andere sofort ab. Die zwei, die auffallen: `pagesize` muss
-1/5/10/30/100/300/1000 sein, und `days` bei `price_history` muss
-31/91/183/365 sein. Die Tools runden `rows` und `days` auf erlaubte Werte, ein
-400 heißt also meist, dass sich ein anderer Parameter geändert hat; die
-Antwort nennt das betroffene Feld. Die Tools melden das als Tool-Fehler mit
-lesbarer Meldung statt des rohen HTTP-Fehlers, damit das Modell sieht, was
-schiefging, statt einer internen URL.
-
-**`could not answer ... (HTTP 503)`**: Die Anfrage war in Ordnung, aber
-Geizhals hat auch nach zwei Wiederholungen nicht geantwortet. Das liegt auf
-deren Seite; später nochmal versuchen.
-
-**`uvx` oder `uv` nicht gefunden**: [uv](https://docs.astral.sh/uv/getting-started/installation/)
-installieren oder den Weg über den Klon mit normalem Python nehmen.
-Programme mit Oberfläche wie Claude Desktop sehen ein `uv` manchmal nicht, das
-nur im `PATH` deiner Shell steht; gib dann den vollen Pfad (`which uvx`, unter
-Windows `where uvx`) als `"command"` an.
 
 ## Haftungsausschluss
 

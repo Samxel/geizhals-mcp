@@ -20,8 +20,6 @@ important fields to the AI.
   <a href="#run-it-yourself">Run</a> ·
   <a href="#tools">Tools</a> ·
   <a href="#notes">Notes</a> ·
-  <a href="#tests">Tests</a> ·
-  <a href="#troubleshooting">Troubleshooting</a> ·
   <a href="#disclaimer">Disclaimer</a> ·
   <a href="#license">License</a>
 </p>
@@ -339,42 +337,6 @@ enough to outlast the sale, and to ask for the address instead of guessing it.
   out of `main`'s history.
 - API details are documented in [`search_api.md`](search_api.md).
 - This uses Geizhals' internal mobile API, not an official one. Be nice to it.
-
-## Tests
-
-```bash
-pip install -r requirements.txt pytest
-pytest
-```
-
-The suite runs offline against canned API responses and goes through a real
-MCP client, stdio transport included. `GEIZHALS_LIVE=1 pytest` adds smoke tests
-against the live API. CI runs the offline suite on every push and the live
-tests once a day, which is what catches Geizhals rotating its signing secret.
-
-## Troubleshooting
-
-**`403 invalid request_fingerprint in payload`** — the HMAC secret or
-signing scheme in `geizhals/api.py` (`GH_HMAC_SECRET`, `request_fingerprint`,
-`API_HOST`) no longer matches what the live Geizhals app sends. This is
-reverse-engineered from the app and hardcoded, so it can drift whenever
-Geizhals rotates the secret or changes the fingerprint scheme.
-
-**`400 Bad Request`** — Geizhals validates several params against fixed sets
-and rejects anything else outright. The two that bite: `pagesize` must be one
-of 1/5/10/30/100/300/1000, and `price_history`'s `days` must be 31/91/183/365.
-The tools snap `rows` and `days` to allowed values, so a 400 usually means
-another param drifted; the response body names the offending field. Tools
-report it as a tool error with a readable message rather than the raw HTTP
-error, so the model sees what went wrong instead of an internal URL.
-
-**`could not answer ... (HTTP 503)`** — the request was fine but Geizhals did
-not answer, even after two retries. That is on their side; try again later.
-
-**`uvx` or `uv` not found** — install [uv](https://docs.astral.sh/uv/getting-started/installation/),
-or use the clone route with plain Python. GUI apps such as Claude Desktop may
-not see a `uv` installed only in your shell's `PATH`; give the full path
-(`which uvx`, `where uvx` on Windows) as `"command"` then.
 
 ## Disclaimer
 
