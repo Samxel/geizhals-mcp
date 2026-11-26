@@ -18,7 +18,7 @@ async def test_every_tool_offers_only_at_and_de():
         if "loc" in props:
             assert props["loc"]["enum"] == ["at", "de"], tool.name
         if "hloc" in props:
-            assert props["hloc"]["anyOf"][0]["items"]["enum"] == ["at", "de"], tool.name
+            assert props["hloc"]["items"]["enum"] == ["at", "de"], tool.name
 
 
 async def test_other_sites_are_rejected(api, call):

@@ -91,14 +91,50 @@ WRITES = ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHi
                          openWorldHint=True)
 
 
+def _slim_schema(node):
+    """Cut what pydantic adds to every parameter but no model needs: a
+    ``title`` that repeats the name, and for an optional parameter the
+    ``"default": null`` and the ``null`` branch of its ``anyOf`` (leaving it out
+    is how it is omitted). Validation still runs on the full Python signature,
+    so this only shortens what the model reads on every turn."""
+    if not isinstance(node, dict):
+        return node
+    node.pop("title", None)
+    if "default" in node and node["default"] is None:
+        del node["default"]
+        branches = [b for b in node.get("anyOf", []) if b != {"type": "null"}]
+        if branches:
+            del node["anyOf"]
+            if len(branches) == 1:
+                node.update(branches[0])
+            else:
+                node["anyOf"] = branches
+    for key in ("properties", "$defs"):
+        for child in node.get(key, {}).values():
+            _slim_schema(child)
+    for key in ("items", "additionalProperties"):
+        _slim_schema(node.get(key))
+    for branch in node.get("anyOf", []):
+        _slim_schema(branch)
+    return node
+
+
+def _register(fn, annotations: ToolAnnotations):
+    """Register `fn` (its docstring dedented, since only Python 3.13+ does that
+    itself) and slim its parameter schema."""
+    mcp.tool(description=inspect.cleandoc(fn.__doc__ or ""), annotations=annotations,
+             structured_output=False)(fn)
+    tool = mcp._tool_manager.get_tool(fn.__name__)
+    tool.parameters = _slim_schema(tool.parameters)
+    return fn
+
+
 def _tool(fn=None, *, annotations: ToolAnnotations = ONLINE):
     """Register `fn` as a tool whose dict result goes out as compact JSON with
     its null fields left out. Left to the SDK, a dict is pretty-printed with a
     two-space indent, which is about a third of a typical result's tokens.
     structured_output stays off: it would send every result a second time as
-    structuredContent and add an output schema to the tool listing. The
-    docstring is dedented here because only Python 3.13+ does that itself; on
-    older ones every description line would carry four spaces of indent."""
+    structuredContent and add an output schema to the tool listing."""
     if fn is None:
         return functools.partial(_tool, annotations=annotations)
 
@@ -106,8 +142,7 @@ def _tool(fn=None, *, annotations: ToolAnnotations = ONLINE):
     async def wrapper(*args, **kwargs):
         result = await fn(*args, **kwargs)
         return json.dumps(_prune(result), ensure_ascii=False, separators=(",", ":"))
-    return mcp.tool(description=inspect.cleandoc(fn.__doc__ or ""), annotations=annotations,
-                    structured_output=False)(wrapper)
+    return _register(wrapper, annotations)
 
 
 # One call must not be able to flood the model's context -- a 500-row search is
