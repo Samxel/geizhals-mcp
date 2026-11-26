@@ -173,7 +173,7 @@ async def search_geizhals(
     category: Optional[str] = None,
     manufacturer: Optional[int] = None,
     sort: Sort = "",
-    rows: int = 10,
+    rows: int = 5,
     offset: int = 0,
 ) -> dict:
     """Search products by keyword, e.g. "iphone 15" or "rtx 4070". Start here
@@ -197,7 +197,7 @@ async def search_geizhals(
         sort: "" (relevance, default), "p" (cheapest first) or "-p" (most
             expensive first). A price sort also drops products without a live
             price from ``results`` and ``total``.
-        rows: Results per page, at most 50. Default 10.
+        rows: Results per page, at most 50. Default 5.
         offset: Paging offset. Default 0.
     """
     rows = _cap(rows, "rows")
@@ -409,7 +409,7 @@ async def browse_category(category: str, *, loc: Country = "at",
                           hloc: Optional[list[Country]] = None,
                           lang: Literal["en", "de"] = "en", sort: CategorySort = "t",
                           price_min: Optional[float] = None, price_max: Optional[float] = None,
-                          rows: int = 20, offset: int = 0) -> dict:
+                          rows: int = 10, offset: int = 0) -> dict:
     """List the products of one category, for when the user names a
     product type ("washing machines") rather than a product. Take the code
     from ``list_categories`` or a hit's ``category_code`` instead of guessing.
@@ -423,7 +423,7 @@ async def browse_category(category: str, *, loc: Country = "at",
         sort: "t" (relevance, default), "p" (cheapest first), "-p" (most
             expensive first), "n" (newest listings) or "bew" (best rated).
         price_min / price_max: Optional bounds on the best price.
-        rows: Results per page, at most 50. Default 20.
+        rows: Results per page, at most 50. Default 10.
         offset: Paging offset. Default 0.
     """
     rows = _cap(rows, "rows")
@@ -518,7 +518,7 @@ async def get_deals(
     lang: Literal["en", "de"] = "en",
     min_discount_percent: Optional[float] = None,
     max_price: Optional[float] = None,
-    limit: int = 20,
+    limit: int = 10,
     offset: int = 0,
 ) -> dict:
     """Current price drops, for "what's on sale right now". Each deal has
@@ -535,7 +535,7 @@ async def get_deals(
             "latest", "popularity" or "top" (top deals first).
         min_discount_percent: Keep drops of at least this many percent.
         max_price: Keep deals with a ``best_price`` of at most this.
-        limit: Deals to return, at most 50. Default 20.
+        limit: Deals to return, at most 50. Default 10.
         offset: Skip this many matches, to page on. Default 0.
     """
     limit = _cap(limit, "limit")
