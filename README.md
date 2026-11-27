@@ -41,13 +41,8 @@ important fields to the AI.
 
 ## Setup
 
-Pick one of three ways. All of them need nothing running in the background:
-the client starts the server when it needs it.
-
-**Claude Desktop, no terminal.** Download `geizhals-mcp.mcpb` from the
-[latest release](https://github.com/Samxel/geizhals-mcp/releases/latest) and
-double-click it. Claude Desktop shows an install dialog and sets up the
-dependencies itself. Done; skip the rest of this section.
+Pick one of two ways. Neither needs anything running in the background: the
+client starts the server when it needs it.
 
 **With [uv](https://docs.astral.sh/uv/), no clone.** One command runs the
 current version straight from GitHub:
@@ -90,8 +85,7 @@ geizhals` takes it out again.
 
 ### Claude Desktop
 
-The `.mcpb` from [Setup](#setup) is the easiest way. Without it, open
-**Settings > Developer > Edit Config**, add the `geizhals` entry to
+Open **Settings > Developer > Edit Config**, add the `geizhals` entry to
 `claude_desktop_config.json` and restart Claude Desktop:
 
 ```json
