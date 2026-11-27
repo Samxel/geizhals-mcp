@@ -154,13 +154,12 @@ http://127.0.0.1:8000/mcp`. Host, port and path live at the top of
 
 ## Tools
 
-Most tools take three shared parameters: `loc` is the country site,
-`"at"` (default) or `"de"`; `hloc` lists the shop countries to include and
-defaults to `[loc]`; `lang` (`"en"` or `"de"`) sets the language of category
-names. Results come as compact JSON, and fields without a value are left out.
-Hits carry no link of their own: a product's page is
-`https://geizhals.at/a{id}.html` (`geizhals.de` for `loc="de"`), which the
-server instructions tell the AI once instead of repeating it in every hit.
+Most tools take three shared parameters: `loc` is the country site, `"at"`
+(default) or `"de"`; `hloc` lists the shop countries to include and defaults to
+`[loc]`; `lang` (`"en"` or `"de"`) sets the language of category names. Results
+come as compact JSON, and fields without a value are left out. Every product,
+hit and deal carries its `url`, and every shop offer a `url` straight to that
+shop's offer; the server instructions ask the AI to link whatever it names.
 
 <details>
 <summary><code>search_geizhals(query, ...)</code>: search products by keyword, with live prices</summary>
@@ -186,9 +185,10 @@ has no price, so unavailable products leave both `results` and `total`.
 <summary><code>get_product(product_id, n_offers=5)</code>: get one product in full, with its cheapest shops</summary>
 
 Full detail of one product: current best price and offer count, name, category,
-rating, images, GTIN, offer link, all-time price range and test-review count.
+rating, images, GTIN, `url`, all-time price range and test-review count.
 `offers` lists the cheapest shops with price, cheapest shipping, total, the
-shop's own stock text and its rating. A product with no live offers gets its
+shop's own stock text, its rating and a `url` straight to the shop's offer. A
+product with no live offers gets its
 `last_known_price` / `last_known_date` filled in. Clothing lists its `sizes`.
 
 </details>

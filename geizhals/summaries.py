@@ -96,7 +96,13 @@ def _currency(p: dict) -> Optional[str]:
     return None
 
 
-def search_hit(p: dict) -> dict:
+def link(site: str, gzhid) -> Optional[str]:
+    """The short product page: the site finds a product by its id alone, so the
+    name slug in the long form is only extra tokens."""
+    return f"https://{site}/a{gzhid}.html" if gzhid else None
+
+
+def search_hit(p: dict, site: str = "geizhals.at") -> dict:
     prices = p.get("prices") or {}
     best_price = to_float(prices.get("best"))
     offer_count = p.get("offer_count")
@@ -117,6 +123,7 @@ def search_hit(p: dict) -> dict:
         "shop": _best_shop(p),
         "rating_stars": p.get("rating_stars"),
         "rating_count": p.get("rating_count"),
+        "url": link(site, p.get("gzhid")),
         "mpn": p.get("mpn"),
         "listed_since": (p.get("listed_since") or "")[:10] or None,
     }
@@ -134,7 +141,6 @@ def search_hit(p: dict) -> dict:
 
 
 def product(p: dict, site: str = "geizhals.at") -> dict:
-    urls = p.get("urls") or {}
     bp = p.get("bestprices") or {}
     prices = p.get("prices") or {}
     best_price = to_float(prices.get("best"))
@@ -162,7 +168,7 @@ def product(p: dict, site: str = "geizhals.at") -> dict:
         "alltime_first_date": iso_date(bp.get("first")),
         "alltime_last_date": iso_date(bp.get("last")),
         "images": _image_urls(p.get("images")),
-        "offers_url": f"https://{site}{urls.get('offers')}" if urls.get("offers") else None,
+        "url": link(site, p.get("gzhid")),
         "test_reviews": len(p.get("test_reviews") or []),
         "gtin": p.get("gtin") or None,
         # clothing and shoes: the sizes on offer, which a price alarm can be limited to
@@ -184,6 +190,7 @@ def offer(o: dict, loc: str) -> dict:
     shipping = min(costs) if costs else None
     stock = (((o.get("avl") or {}).get("descr") or [{}])[0] or {}).get("text") or ""
     rating = shop.get("rating") or {}
+    redirect = (o.get("price") or {}).get("url")
     return {
         "shop": shop.get("merchant_name") or shop.get("name"),
         "price": price,
@@ -192,11 +199,13 @@ def offer(o: dict, loc: str) -> dict:
         # the first line is the mail-order stock; the rest lists pickup branches
         "availability": stock.splitlines()[0] if stock else None,
         "shop_rating": round(rating["rating"], 1) if isinstance(rating.get("rating"), (int, float)) else None,
+        # Geizhals' own click-out to this shop's offer, the link its offer list uses
+        "url": f"https://{site_for(loc)}/{redirect.lstrip('/')}" if redirect else None,
         "shop_rating_count": rating.get("count"),
     }
 
 
-def deal(d: dict) -> dict:
+def deal(d: dict, site: str = "geizhals.at") -> dict:
     """One price drop. ``rank`` is only there to sort by popularity; the page
     sent out drops it, see ``deal_out``."""
     return {
@@ -218,6 +227,9 @@ def deal(d: dict) -> dict:
         "rating_count": d.get("rating_count"),
         "shop": d.get("hname"),
         "changed_at": _iso_minute(d.get("timestamp")),
+        # best_deep_link is a 300-character tracking redirect; the product page,
+        # with every shop, is what an answer links to
+        "url": link(site, d.get("id")),
     }
 
 
@@ -225,7 +237,7 @@ def deal_out(d: dict) -> dict:
     return {k: v for k, v in d.items() if k != "rank"}
 
 
-def category_hit(p: dict, category: Optional[str] = None) -> dict:
+def category_hit(p: dict, category: Optional[str] = None, site: str = "geizhals.at") -> dict:
     """Normalize a categorylist product into the same shape ``search_geizhals``
     returns (categorylist ships raw, inconsistent fields otherwise), so code
     that reads either source sees the same keys."""
@@ -245,6 +257,7 @@ def category_hit(p: dict, category: Optional[str] = None) -> dict:
         "shop": p.get("best_merch_name"),
         "rating_stars": p.get("rating_stars"),
         "rating_count": p.get("rating_count"),
+        "url": link(site, p.get("id")),
         "mpn": p.get("mpn"),
     }
 

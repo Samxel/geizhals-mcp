@@ -160,9 +160,9 @@ Die meisten Tools haben drei gemeinsame Parameter: `loc` ist die Länderseite,
 `"at"` (Standard) oder `"de"`; `hloc` listet die Shop-Länder, die einbezogen
 werden, und ist standardmäßig `[loc]`; `lang` (`"en"` oder `"de"`) bestimmt die
 Sprache der Kategorienamen. Ergebnisse kommen als kompaktes JSON, Felder ohne
-Wert fallen weg. Treffer haben keinen eigenen Link: Die Produktseite ist
-`https://geizhals.at/a{id}.html` (`geizhals.de` bei `loc="de"`). Das steht
-einmal in den Server-Anweisungen, statt in jedem Treffer wiederholt zu werden.
+Wert fallen weg. Jedes Produkt, jeder Treffer und jeder Deal hat seine `url`,
+jedes Shop-Angebot eine `url` direkt zum Angebot des Shops; die
+Server-Anweisungen bitten die KI, alles zu verlinken, was sie nennt.
 
 <details>
 <summary><code>search_geizhals(query, ...)</code>: Produkte per Suchbegriff finden, mit aktuellen Preisen</summary>
@@ -190,10 +190,10 @@ verfügbare Produkte aus `results` und aus `total` heraus.
 <summary><code>get_product(product_id, n_offers=5)</code>: ein Produkt mit allen Details und den günstigsten Shops</summary>
 
 Alle Details zu einem Produkt: aktueller Bestpreis und Zahl der Angebote, Name,
-Kategorie, Bewertung, Bilder, GTIN, Angebotslink, bisherige Preisspanne und
+Kategorie, Bewertung, Bilder, GTIN, `url`, bisherige Preisspanne und
 Zahl der Testberichte. `offers` listet die günstigsten Shops mit
-Preis, günstigstem Versand, Gesamtpreis, dem Lagertext des Shops und seiner
-Bewertung. Bei einem Produkt ohne aktuelle Angebote werden `last_known_price` /
+Preis, günstigstem Versand, Gesamtpreis, dem Lagertext des Shops, seiner
+Bewertung und einer `url` direkt zum Angebot des Shops. Bei einem Produkt ohne aktuelle Angebote werden `last_known_price` /
 `last_known_date` ergänzt. Bei Kleidung stehen die `sizes` dabei.
 
 </details>

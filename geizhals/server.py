@@ -49,8 +49,9 @@ available: false means a product has no live offers right now (discontinued or \
 temporarily unlisted). Such hits carry their all-time price range, and \
 get_product adds the last known price.
 
-Fields without a value are left out of results. Hits carry no link: a \
-product's page is https://geizhals.at/a{id}.html (geizhals.de for loc "de").
+Fields without a value are left out of results. Every product, hit and deal \
+has a url, and every shop offer a url straight to that shop's offer: whenever \
+you name a product or an offer to the user, give its link.
 
 Price alarms: if a wanted product is well above its all-time low or a sale \
 (Black Friday, Christmas) is near, offer create_price_alarm, with an expiry_days \
@@ -208,7 +209,7 @@ async def search_geizhals(
     price_range = {"min": price_range.get("min") or None, "max": price_range.get("max") or None}
     return {
         "total": data.get("total"),
-        "results": [summaries.search_hit(p) for p in (data.get("products") or [])[:rows]],
+        "results": [summaries.search_hit(p, summaries.site_for(loc)) for p in (data.get("products") or [])[:rows]],
         "facets": {
             "categories": [{"id": c.get("id"),
                             "name": (CATEGORY_PATH[lang].get(c.get("id") or "") or [c.get("name")])[-1],
@@ -253,8 +254,8 @@ async def get_product(product_id: int, *, loc: Country = "at",
 
     ``offers`` lists the cheapest shops with ``price``, ``shipping`` (cheapest
     method, left out for pickup-only shops), ``total``, the shop's own
-    ``availability`` text and its ``shop_rating`` out of 5. Sorting by
-    ``total`` can change the winner.
+    ``availability`` text, its ``shop_rating`` out of 5 and a ``url`` straight
+    to that shop's offer. Sorting by ``total`` can change the winner.
 
     Args:
         product_id: The Geizhals product id, e.g. a search hit's ``id``.
@@ -448,7 +449,7 @@ async def browse_category(category: str, *, loc: Country = "at",
         "total": data.get("total"),
         # unlike the search facet, this one is real
         "price_range": data.get("price_range"),
-        "results": [summaries.category_hit(p, category)
+        "results": [summaries.category_hit(p, category, summaries.site_for(loc))
                     for p in products[:rows] if isinstance(p, dict)],
     }
 
@@ -546,7 +547,7 @@ async def get_deals(
         raise ToolError(f"offset must not be negative (got {offset}).")
     raw, total = await api.all_deals(api.params(loc, hloc, lang=lang, limit=api.DEALS_PAGE_SIZE,
                                                 price_range=1))
-    deals = [summaries.deal(d) for d in raw]
+    deals = [summaries.deal(d, summaries.site_for(loc)) for d in raw]
     scanned = len(deals)
     top_deal_count = sum(1 for d in deals if d["top_deal"])
 
@@ -622,7 +623,7 @@ async def get_model_price_range(
     # an "iPhone 16 Pro" price sort is 60 cheaper iPhones and no 16 Pro at all.
     data = await api.search_products(model, loc=loc, hloc=hloc, lang="en", category=category,
                                   sort="", rows=max_variants)
-    hits = [summaries.search_hit(p) for p in (data.get("products") or [])[:max_variants]]
+    hits = [summaries.search_hit(p, summaries.site_for(loc)) for p in (data.get("products") or [])[:max_variants]]
     variants = matching.model_variants(hits, wanted)
     prices = [h["best_price"] for h in variants if h["available"] and h["best_price"] is not None]
     cheapest = sorted((h for h in variants if h["available"]), key=lambda h: h["best_price"])
@@ -638,7 +639,7 @@ async def get_model_price_range(
         "considered": len(hits),
         "total_hits": data.get("total"),
         "cheapest": [{"id": h["id"], "name": h["name"], "best_price": h["best_price"],
-                      "offer_count": h["offer_count"], "shop": h["shop"]} for h in cheapest[:5]],
+                      "offer_count": h["offer_count"], "shop": h["shop"], "url": h["url"]} for h in cheapest[:5]],
     }
     notes = []
     if detected:
@@ -696,7 +697,7 @@ async def match_geizhals(
 
     wanted = set(tokens)
     candidates = []
-    for hit in (summaries.search_hit(p) for p in products):
+    for hit in (summaries.search_hit(p, summaries.site_for(loc)) for p in products):
         score = matching.match_score(wanted, hit["name"] or "")
         if not hit["category_code"]:
             score = round(score * matching.UNCATEGORISED_FACTOR, 3)

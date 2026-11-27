@@ -10,7 +10,7 @@ pytestmark = pytest.mark.anyio
 
 def offer(shop, price, *, shipping=None, stock="lagernd", rating=4.73, count=1618):
     return {
-        "price": {"value": price, "currency": "EUR"},
+        "price": {"value": price, "currency": "EUR", "url": f"redir/{shop}-offer"},
         "avl": {"descr": [{"text": stock}]} if stock else {},
         "shop": {"name": f"{shop} GmbH", "merchant_name": shop,
                  "shipping": {"at": shipping} if shipping is not None else {},
@@ -38,7 +38,8 @@ async def test_offers_carry_price_shipping_total_and_stock(product, call):
     alza, etec, store = result["offers"]
     assert alza == {"shop": "alza.at", "price": 864.9, "shipping": 4.49, "total": 869.39,
                     "availability": "Versandlager: lagernd, Lieferzeit 1-2 Werktage",
-                    "shop_rating": 4.7, "shop_rating_count": 1618}
+                    "shop_rating": 4.7, "shop_rating_count": 1618,
+                    "url": "https://geizhals.at/redir/alza.at-offer"}
     assert (etec["shipping"], etec["total"]) == (0.0, 956.98)
     assert "shipping" not in store and "total" not in store
     assert result["gtin"] == ["4719331355715"]
@@ -51,3 +52,9 @@ async def test_n_offers_trims_and_is_bounded(product, call):
     assert product.sent("query_product")[-1]["params"]["n_offers"] == 20
     with pytest.raises(ToolFailed, match="n_offers must be at least 1"):
         await call("get_product", product_id=3381918, n_offers=0)
+
+
+async def test_every_offer_links_straight_to_the_shop(product, call):
+    result = await call("get_product", product_id=3381918)
+    assert result["url"] == "https://geizhals.at/a3381918.html"
+    assert result["offers"][0]["url"] == "https://geizhals.at/redir/alza.at-offer"

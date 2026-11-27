@@ -29,8 +29,8 @@ async def test_deals_link_the_product_page_not_the_shop_redirect(api, call):
     result = await call("get_deals", sort="latest", loc="de")
     first = result["deals"][0]
     assert first["id"] == 2
-    # the link is built from the id (see the instructions), not sent per deal
-    assert "url" not in first and "rank" not in first
+    # the short product page, not the 300-character shop redirect
+    assert first["url"] == "https://geizhals.de/a2.html" and "rank" not in first
     # flags only appear when set
     assert "alltime_best" not in first and "top_deal" not in first
     assert first["changed_at"] == "2026-10-27T12:43Z"
@@ -38,13 +38,14 @@ async def test_deals_link_the_product_page_not_the_shop_redirect(api, call):
     assert "image" not in first and "timestamp" not in first
 
 
-async def test_hits_carry_no_link_or_category_path(api, call):
+async def test_hits_carry_a_short_link_and_no_category_path(api, call):
     api.on("categorylist", {"response": {
         "total": 1, "products": [category_hit(5, "Bosch WAN28127", best=467.0)]}})
     api.on("search_product", search_response([search_hit(6, "Bosch WAN28127", best=467.0, offers=3)]))
     for hit in [(await call("browse_category", category="hwaschf"))["results"][0],
                 (await call("search_geizhals", query="bosch"))["results"][0]]:
-        assert "url" not in hit and "category" not in hit and hit["category_code"]
+        assert hit["url"] == f"https://geizhals.at/a{hit['id']}.html"
+        assert "category" not in hit and hit["category_code"]
 
 
 async def test_ratings_are_aggregates_ordered_by_star(api, call):
@@ -64,7 +65,7 @@ async def test_match_candidates_carry_only_what_a_match_needs(api, call):
                     best=864.9, offers=18)]))
     [candidate] = (await call("match_geizhals", title="Gigabyte RTX 5070 Windforce OC"))["candidates"]
     assert set(candidate) == {"confidence", "id", "name", "category_code", "best_price", "offer_count",
-                              "available", "shop"}
+                              "available", "shop", "url"}
 
 
 async def test_product_names_the_shop_like_search_does(api, call):

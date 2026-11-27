@@ -38,7 +38,7 @@ UNCATEGORISED_FACTOR = 0.6
 
 # What a match needs to be acted on; the rest of a search hit is a get_product
 # call away once the right candidate is known.
-CANDIDATE_FIELDS = {"id", "name", "category_code", "best_price", "offer_count", "available", "shop",
+CANDIDATE_FIELDS = {"id", "name", "category_code", "best_price", "offer_count", "available", "shop", "url",
                     "alltime_price_min", "alltime_price_max", "alltime_last_date"}
 
 
